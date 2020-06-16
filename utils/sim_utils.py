@@ -1,0 +1,736 @@
+#!/usr/bin/env python3
+# Copyright 2019 Christian Henning
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# @title          :utils/sim_utils.py
+# @author         :ch
+# @contact        :henningc@ethz.ch
+# @created        :12/12/2019
+# @version        :1.0
+# @python_version :3.6.8
+"""
+General helper functions for simulations
+----------------------------------------
+
+The module :mod:`utils.sim_utils` comprises a bunch of functions that are in
+general useful for writing simulations in this repository.
+"""
+import torch
+import tensorboardX
+from tensorboardX import SummaryWriter
+import numpy as np
+import random
+import os
+import select
+import shutil
+import sys
+import pickle
+import logging
+from time import time
+from warnings import warn
+import json
+
+from mnets.chunk_squeezer import ChunkSqueezer
+from mnets.mlp import MLP
+from mnets.simple_rnn import SimpleRNN
+from hnets.chunked_hyper_model import ChunkedHyperNetworkHandler
+from hnets.mlp_hnet import HMLP
+from hnets.chunked_mlp_hnet import ChunkedHMLP
+from hnets.structured_mlp_hnet import StructuredHMLP
+from hnets.deconv_hnet import HDeconv
+from hnets.chunked_deconv_hnet import ChunkedHDeconv
+from hnets.hyper_model import HyperNetwork
+from utils import logger_config
+from utils import misc
+
+def setup_environment(config, logger_name='hnet_sim_logger'):
+    """Setup the general environment for training.
+
+    This function should be called at the beginning of a simulation script
+    (right after the command-line arguments have been parsed). The setup will
+    incorporate:
+
+        - creating the output folder
+        - initializing logger
+        - making computation deterministic (depending on config)
+        - selecting the torch device
+        - creating the Tensorboard writer
+
+    Args:
+        config (argparse.Namespace): Command-line arguments.
+
+            .. note::
+                The function expects command-line arguments available according
+                to the function :func:`utils.cli_args.miscellaneous_args`.
+        logger_name (str): Name of the logger to be created (time stamp will be
+            appended to this name).
+
+    Returns:
+        (tuple): Tuple containing:
+
+        - **device**: Torch device to be used.
+        - **writer**: Tensorboard writer. Note, you still have to close the
+          writer manually!
+        - **logger**: Console (and file) logger.
+    """
+    ### Output folder.
+    if os.path.exists(config.out_dir):
+        # TODO allow continuing from an old checkpoint.
+        # FIXME We do not want to use python its `input` function, as it blocks
+        # the program completely. Therefore, we use `select`, but this might
+        # not work on all platforms!
+        #response = input('The output folder %s already exists. ' % \
+        #                 (config.out_dir) + \
+        #                 'Do you want us to delete it? [y/n]')
+        print('The output folder %s already exists. ' % (config.out_dir) + \
+              'Do you want us to delete it? [y/n]')
+        inps, _, _ = select.select([sys.stdin], [], [], 30)
+        if len(inps) == 0:
+            warn('Timeout occurred. No user input received!')
+            response = 'n'
+        else:
+            response = sys.stdin.readline().strip()
+        if response != 'y':
+            raise IOError('Could not delete output folder!')
+        shutil.rmtree(config.out_dir)
+
+        os.makedirs(config.out_dir)
+        print("Created output folder %s." % (config.out_dir))
+
+    else:
+        os.makedirs(config.out_dir)
+        print("Created output folder %s." % (config.out_dir))
+
+    # Save user configs to ensure reproducibility of this experiment.
+    with open(os.path.join(config.out_dir, 'config.pickle'), 'wb') as f:
+        pickle.dump(config, f)
+    # A JSON file is easier to read for a human.
+    with open(os.path.join(config.out_dir, 'config.json'), 'w') as f:
+        json.dump(vars(config), f)
+
+    ### Initialize logger.
+    logger_name = '%s_%d' % (logger_name, int(time() * 1000))
+    logger = logger_config.config_logger(logger_name,
+        os.path.join(config.out_dir, 'logfile.txt'),
+        logging.DEBUG, logging.INFO if config.loglevel_info else logging.DEBUG)
+    # FIXME If we don't disable this, then the multiprocessing from the data
+    # loader causes all messages to be logged twice. I could not find the cause
+    # of this problem, but this simple switch fixes it.
+    logger.propagate = False
+
+    ### Deterministic computation.
+    torch.manual_seed(config.random_seed)
+    torch.cuda.manual_seed_all(config.random_seed)
+    np.random.seed(config.random_seed)
+    random.seed(config.random_seed)
+
+    # Ensure that runs are reproducible. Note, this slows down training!
+    # https://pytorch.org/docs/stable/notes/randomness.html
+    if config.deterministic_run:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+        if hasattr(config, 'num_workers') and config.num_workers > 1:
+            logger.warning('Deterministic run desired but not possible with ' +
+                           'more than 1 worker (see "num_workers").')
+
+    ### Select torch device.
+    assert(hasattr(config, 'no_cuda') or hasattr(config, 'use_cuda'))
+    assert(not hasattr(config, 'no_cuda') or not hasattr(config, 'use_cuda'))
+
+    if hasattr(config, 'no_cuda'):
+        use_cuda = not config.no_cuda and torch.cuda.is_available()
+    else:
+        use_cuda = config.use_cuda and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+    logger.info('Using cuda: ' + str(use_cuda))
+
+    ### Initialize summary writer.
+    # Flushes every 120 secs by default.
+    # DELETEME Ensure downwards compatibility.
+    if not hasattr(tensorboardX, '__version__'):
+        writer = SummaryWriter(log_dir=os.path.join(config.out_dir, 'summary'))
+    else:
+        writer = SummaryWriter(logdir=os.path.join(config.out_dir, 'summary'))
+
+    return device, writer, logger
+
+def get_mnet_model(config, net_type, in_shape, out_shape, device, cprefix=None,
+                   no_weights=False):
+    """Generate a main network instance.
+
+    A helper to generate a main network according to the given the user
+    configurations.
+
+    .. note::
+        Generation of networks with context-modulation is not yet supported,
+        since there is no global argument set in :mod:`utils.cli_args` yet.
+
+    Args:
+        config (argparse.Namespace): Command-line arguments.
+
+            .. note::
+                The function expects command-line arguments available according
+                to the function :func:`utils.cli_args.main_net_args`.
+        net_type (str): The type of network. The following options are
+            available:
+
+            - ``mlp``: :class:`mnets.mlp.MLP`
+            - ``chunked_mlp``: :class:`mnets.chunk_squeezer.ChunkSqueezer`
+            - ``simple_rnn``: :class:`mnets.simple_rnn.SimpleRNN`
+        in_shape (list): Shape of network inputs. Can be ``None`` if not
+            required by network type.
+
+            For instance: For an MLP network :class:`mnets.mlp.MLP` with 100
+            input neurons it should be :code:`in_shape=[100]`.
+        out_shape (list): Shape of network outputs. See ``in_shape`` for more
+            details.
+        device: PyTorch device.
+        cprefix (str, optional): A prefix of the config names. It might be, that
+            the config names used in this method are prefixed, since several
+            main networks should be generated (e.g., :code:`cprefix='gen_'` or
+            ``'dis_'`` when training a GAN).
+
+            Also see docstring of parameter ``prefix`` in function
+            :func:`utils.cli_args.main_net_args`.
+        no_weights (bool): Whether the main network should be generated without
+            weights.
+
+    Returns:
+        The created main network model.
+    """
+    assert(net_type in ['mlp', 'chunked_mlp', 'simple_rnn'])
+
+    if cprefix is None:
+        cprefix = ''
+
+    def gc(name):
+        """Get config value with that name."""
+        return getattr(config, '%s%s' % (cprefix, name))
+    def hc(name):
+        """Check whether config exists."""
+        return hasattr(config, '%s%s' % (cprefix, name))
+
+    mnet = None
+
+    if hc('net_act'):
+        net_act = gc('net_act')
+        net_act = misc.str_to_act(net_act)
+    else:
+        net_act = None
+
+    def get_val(name):
+        ret = None
+        if hc(name):
+            ret = gc(name)
+        return ret
+
+    no_bias = get_val('no_bias')
+    dropout_rate = get_val('dropout_rate')
+    specnorm = get_val('specnorm')
+    batchnorm = get_val('batchnorm')
+    no_batchnorm = get_val('no_batchnorm')
+    bn_no_running_stats = get_val('bn_no_running_stats')
+    bn_distill_stats = get_val('bn_distill_stats')
+    # This argument has to be handled during usage of the network and not during
+    # construction.
+    #bn_no_stats_checkpointing = get_val('bn_no_stats_checkpointing')
+
+    use_bn = None
+    if batchnorm is not None:
+        use_bn = batchnorm
+    elif no_batchnorm is not None:
+        use_bn = not no_batchnorm
+
+    # If an argument wasn't specified, then we use the default value that
+    # is currently in the constructor.
+    assign = lambda x, y : y if x is None else x
+
+    if net_type == 'mlp':
+        assert(hc('mlp_arch'))
+        assert(len(in_shape) == 1 and len(out_shape) == 1)
+
+        # Default keyword arguments of class MLP.
+        dkws = misc.get_default_args(MLP.__init__)
+
+        mnet = MLP(n_in=in_shape[0], n_out=out_shape[0],
+            hidden_layers=misc.str_to_ints(gc('mlp_arch')),
+            activation_fn=assign(net_act, dkws['activation_fn']),
+            use_bias=assign(not no_bias, dkws['use_bias']),
+            no_weights=no_weights,
+            #init_weights=None,
+            dropout_rate=assign(dropout_rate, dkws['dropout_rate']),
+            use_spectral_norm=assign(specnorm, dkws['use_spectral_norm']),
+            use_batch_norm=assign(use_bn, dkws['use_batch_norm']),
+            bn_track_stats=assign(not bn_no_running_stats,
+                                  dkws['bn_track_stats']),
+            distill_bn_stats=assign(bn_distill_stats, dkws['distill_bn_stats']),
+            #use_context_mod=False,
+            #context_mod_inputs=False,
+            #no_last_layer_context_mod=False,
+            #context_mod_no_weights=False,
+            #context_mod_post_activation=False,
+            #context_mod_gain_offset=False,
+            #out_fn=None,
+            verbose=True).to(device)
+
+    elif net_type == 'chunked_mlp':
+        assert hc('cmlp_arch') and hc('cmlp_chunk_arch') and \
+               hc('cmlp_in_cdim') and hc('cmlp_out_cdim') and \
+               hc('cmlp_cemb_dim')
+        assert len(in_shape) == 1 and len(out_shape) == 1
+
+        # Default keyword arguments of class ChunkSqueezer.
+        dkws = misc.get_default_args(ChunkSqueezer.__init__)
+
+        mnet = ChunkSqueezer(n_in=in_shape[0], n_out=out_shape[0],
+            inp_chunk_dim=gc('cmlp_in_cdim'),
+            out_chunk_dim=gc('cmlp_out_cdim'),
+            cemb_size=gc('cmlp_cemb_dim'),
+            #cemb_init_std=1.,
+            red_layers=misc.str_to_ints(gc('cmlp_chunk_arch')),
+            net_layers=misc.str_to_ints(gc('cmlp_arch')),
+            activation_fn=assign(net_act, dkws['activation_fn']),
+            use_bias=assign(not no_bias, dkws['use_bias']),
+            #dynamic_biases=None,
+            no_weights=no_weights,
+            #init_weights=None,
+            dropout_rate=assign(dropout_rate, dkws['dropout_rate']),
+            use_spectral_norm=assign(specnorm, dkws['use_spectral_norm']),
+            use_batch_norm=assign(use_bn, dkws['use_batch_norm']),
+            bn_track_stats=assign(not bn_no_running_stats,
+                                  dkws['bn_track_stats']),
+            distill_bn_stats=assign(bn_distill_stats, dkws['distill_bn_stats']),
+            verbose=True).to(device)
+    else:
+        assert (net_type == 'simple_rnn')
+        assert hc('srnn_rec_layers') and hc('srnn_pre_fc_layers') and \
+            hc('srnn_post_fc_layers')  and hc('srnn_no_fc_out') and \
+            hc('srnn_rec_type')
+        assert len(in_shape) == 1 and len(out_shape) == 1
+
+        if gc('srnn_rec_type') == 'lstm':
+            use_lstm = True
+        else:
+            assert gc('srnn_rec_type') == 'elman'
+            use_lstm = False
+
+        # Default keyword arguments of class SimpleRNN.
+        dkws = misc.get_default_args(SimpleRNN.__init__)
+
+        rnn_layers = misc.str_to_ints(gc('srnn_rec_layers'))
+        fc_layers = misc.str_to_ints(gc('srnn_post_fc_layers'))
+        if gc('srnn_no_fc_out'):
+            rnn_layers.append(out_shape[0])
+        else:
+            fc_layers.append(out_shape[0])
+
+        mnet = SimpleRNN(n_in=in_shape[0], rnn_layers=rnn_layers,
+            fc_layers_pre=misc.str_to_ints(gc('srnn_pre_fc_layers')),
+            fc_layers=fc_layers,
+            activation=assign(net_act, dkws['activation']),
+            use_lstm=use_lstm,
+            use_bias=assign(not no_bias, dkws['use_bias']),
+            no_weights=no_weights,
+            verbose=True).to(device)
+
+    return mnet
+
+def get_hypernet(config, device, net_type, target_shapes, num_conds,
+                 no_cond_weights=False, no_uncond_weights=False,
+                 uncond_in_size=0, shmlp_chunk_shapes=None,
+                 shmlp_num_per_chunk=None, shmlp_assembly_fct=None,
+                 cprefix=None):
+    """Generate a hypernetwork instance.
+
+    A helper to generate the hypernetwork according to the given the user
+    configurations.
+
+    Args:
+        config (argparse.Namespace): Command-line arguments.
+
+            Note:
+                The function expects command-line arguments available according
+                to the function :func:`utils.cli_args.hnet_args`.
+        device: PyTorch device.
+        net_type (str): The type of network. The following options are
+            available:
+
+            - ``'hmlp'``
+            - ``'chunked_hmlp'``
+            - ``'structured_hmlp'``
+            - ``'hdeconv'``
+            - ``'chunked_hdeconv'``
+        target_shapes (list): See argument ``target_shapes`` of
+            :class:`hnets.mlp_hnet.HMLP`.
+        num_conds (int): Number of conditions that should be known to the
+            hypernetwork.
+        no_cond_weights (bool): See argument ``no_cond_weights`` of
+            :class:`hnets.mlp_hnet.HMLP`.
+        no_uncond_weights (bool): See argument ``no_uncond_weights`` of
+            :class:`hnets.mlp_hnet.HMLP`.
+        uncond_in_size (int): See argument ``uncond_in_size`` of
+            :class:`hnets.mlp_hnet.HMLP`.
+        shmlp_chunk_shapes (list, optional): Argument ``chunk_shapes`` of
+            :class:`hnets.structured_mlp_hnet.StructuredHMLP`.
+        shmlp_num_per_chunk (list, optional): Argument ``num_per_chunk`` of
+            :class:`hnets.structured_mlp_hnet.StructuredHMLP`.
+        shmlp_assembly_fct (func, optional): Argument ``assembly_fct`` of
+            :class:`hnets.structured_mlp_hnet.StructuredHMLP`.
+        cprefix (str, optional): A prefix of the config names. It might be, that
+            the config names used in this function are prefixed, since several
+            hypernetworks should be generated.
+
+            Also see docstring of parameter ``prefix`` in function
+            :func:`utils.cli_args.hnet_args`.
+    """
+    assert net_type in ['hmlp', 'chunked_hmlp', 'structured_hmlp', 'hdeconv',
+                        'chunked_hdeconv']
+
+    hnet = None
+
+    ### FIXME Code almost identically copied from `get_mnet_model` ###
+    if cprefix is None:
+        cprefix = ''
+
+    def gc(name):
+        """Get config value with that name."""
+        return getattr(config, '%s%s' % (cprefix, name))
+    def hc(name):
+        """Check whether config exists."""
+        return hasattr(config, '%s%s' % (cprefix, name))
+
+    if hc('hnet_net_act'):
+        net_act = gc('hnet_net_act')
+        net_act = misc.str_to_act(net_act)
+    else:
+        net_act = None
+
+    def get_val(name):
+        ret = None
+        if hc(name):
+            ret = gc(name)
+        return ret
+
+    no_bias = get_val('hnet_no_bias')
+    dropout_rate = get_val('hnet_dropout_rate')
+    specnorm = get_val('hnet_specnorm')
+    batchnorm = get_val('hnet_batchnorm')
+    no_batchnorm = get_val('hnet_no_batchnorm')
+    #bn_no_running_stats = get_val('hnet_bn_no_running_stats')
+    #n_distill_stats = get_val('hnet_bn_distill_stats')
+
+    use_bn = None
+    if batchnorm is not None:
+        use_bn = batchnorm
+    elif no_batchnorm is not None:
+        use_bn = not no_batchnorm
+
+    # If an argument wasn't specified, then we use the default value that
+    # is currently in the constructor.
+    assign = lambda x, y : y if x is None else x
+    ### FIXME Code copied until here                               ###
+
+    if hc('hmlp_arch'):
+        hmlp_arch_is_list = False
+        hmlp_arch = gc('hmlp_arch')
+        if ';' in hmlp_arch:
+            hmlp_arch_is_list = True
+            if net_type != 'structured_hmlp':
+                raise ValueError('Option "%shmlp_arch" may only ' % (cprefix) +
+                                 'contain semicolons for network type ' +
+                                 '"structured_hmlp"!')
+            hmlp_arch = [misc.str_to_ints(ar) for ar in hmlp_arch.split(';')]
+        else:
+            hmlp_arch = misc.str_to_ints(hmlp_arch)
+    if hc('chunk_emb_size'):
+        chunk_emb_size = gc('chunk_emb_size')
+        chunk_emb_size = misc.str_to_ints(chunk_emb_size)
+        if len(chunk_emb_size) == 1:
+            chunk_emb_size = chunk_emb_size[0]
+        else:
+            if net_type != 'structured_hmlp':
+                raise ValueError('Option "%schunk_emb_size" may ' % (cprefix) +
+                                 'only contain multiple values for network ' +
+                                 'type "structured_hmlp"!')
+
+    if net_type == 'hmlp':
+        assert hc('hmlp_arch')
+        assert hc('cond_emb_size')
+
+        # Default keyword arguments of class HMLP.
+        dkws = misc.get_default_args(HMLP.__init__)
+
+        hnet = HMLP(target_shapes,
+            uncond_in_size=uncond_in_size,
+            cond_in_size=gc('cond_emb_size'),
+            layers=hmlp_arch,
+            verbose=True,
+            activation_fn=assign(net_act, dkws['activation_fn']),
+            use_bias=assign(not no_bias, dkws['use_bias']),
+            no_uncond_weights=no_uncond_weights,
+            no_cond_weights=no_cond_weights,
+            num_cond_embs=num_conds,
+            dropout_rate=assign(dropout_rate, dkws['dropout_rate']),
+            use_spectral_norm=assign(specnorm, dkws['use_spectral_norm']),
+            use_batch_norm=assign(use_bn, dkws['use_batch_norm'])).to(device)
+
+    elif net_type == 'chunked_hmlp':
+        assert hc('hmlp_arch')
+        assert hc('cond_emb_size')
+        assert hc('chmlp_chunk_size')
+        assert hc('chunk_emb_size')
+        cond_chunk_embs = get_val('use_cond_chunk_embs')
+
+        # Default keyword arguments of class ChunkedHMLP.
+        dkws = misc.get_default_args(ChunkedHMLP.__init__)
+
+        hnet = ChunkedHMLP(target_shapes, gc('chmlp_chunk_size'),
+            chunk_emb_size=chunk_emb_size,
+            cond_chunk_embs=assign(cond_chunk_embs, dkws['cond_chunk_embs']),
+            uncond_in_size=uncond_in_size,
+            cond_in_size=gc('cond_emb_size'),
+            layers=hmlp_arch,
+            verbose=True,
+            activation_fn=assign(net_act, dkws['activation_fn']),
+            use_bias=assign(not no_bias, dkws['use_bias']),
+            no_uncond_weights=no_uncond_weights,
+            no_cond_weights=no_cond_weights,
+            num_cond_embs=num_conds,
+            dropout_rate=assign(dropout_rate, dkws['dropout_rate']),
+            use_spectral_norm=assign(specnorm, dkws['use_spectral_norm']),
+            use_batch_norm=assign(use_bn, dkws['use_batch_norm'])).to(device)
+
+    elif net_type == 'structured_hmlp':
+        assert hc('hmlp_arch')
+        assert hc('cond_emb_size')
+        assert hc('chunk_emb_size')
+        cond_chunk_embs = get_val('use_cond_chunk_embs')
+
+        assert shmlp_chunk_shapes is not None and \
+            shmlp_num_per_chunk is not None and \
+            shmlp_assembly_fct is not None
+
+        # Default keyword arguments of class StructuredHMLP.
+        dkws = misc.get_default_args(StructuredHMLP.__init__)
+        dkws_hmlp = misc.get_default_args(HMLP.__init__)
+
+        shmlp_hmlp_kwargs = []
+        if not hmlp_arch_is_list:
+            hmlp_arch = [hmlp_arch]
+        for i, arch in enumerate(hmlp_arch):
+            shmlp_hmlp_kwargs.append({
+                'layers': arch,
+                'activation_fn': assign(net_act, dkws_hmlp['activation_fn']),
+                'use_bias': assign(not no_bias, dkws_hmlp['use_bias']),
+                'dropout_rate': assign(dropout_rate, dkws_hmlp['dropout_rate']),
+                'use_spectral_norm': \
+                    assign(specnorm, dkws_hmlp['use_spectral_norm']),
+                'use_batch_norm': assign(use_bn, dkws_hmlp['use_batch_norm'])
+            })
+        if len(shmlp_hmlp_kwargs) == 1:
+            shmlp_hmlp_kwargs = shmlp_hmlp_kwargs[0]
+
+        hnet = StructuredHMLP(target_shapes,
+            shmlp_chunk_shapes,
+            shmlp_num_per_chunk,
+            chunk_emb_size,
+            shmlp_hmlp_kwargs,
+            shmlp_assembly_fct,
+            cond_chunk_embs=assign(cond_chunk_embs, dkws['cond_chunk_embs']),
+            uncond_in_size=uncond_in_size,
+            cond_in_size=gc('cond_emb_size'),
+            verbose=True,
+            no_uncond_weights=no_uncond_weights,
+            no_cond_weights=no_cond_weights,
+            num_cond_embs=num_conds).to(device)
+
+    elif net_type == 'hdeconv':
+        #HDeconv
+        raise NotImplementedError
+    else:
+        assert net_type == 'chunked_hdeconv'
+        #ChunkedHDeconv
+        raise NotImplementedError
+
+    return hnet
+
+
+def get_hnet_model(config, num_tasks, device, mnet_shapes, cprefix=None,
+                   no_weights=False, no_tembs=False, temb_size=None):
+    """Generate a hypernetwork instance.
+
+    A helper to generate the hypernetwork according to the given the user
+    configurations.
+
+    .. deprecated:: 1.0
+        Please use function :func:`get_hypernet` instead. As this function
+        creates deprecated hypernetworks.
+
+    Args:
+        config (argparse.Namespace): Command-line arguments.
+
+            .. note::
+                The function expects command-line arguments available according
+                to the function :func:`utils.cli_args.hypernet_args`.
+        num_tasks (int): The number of task embeddings the hypernetwork should
+            have.
+        device: PyTorch device.
+        mnet_shapes: Dimensions of the weight tensors of the main network.
+            See main net argument
+            :attr:`mnets.mnet_interface.MainNetInterface.param_shapes`.
+        cprefix (str, optional): A prefix of the config names. It might be, that
+            the config names used in this method are prefixed, since several
+            hypernetworks should be generated (e.g., :code:`cprefix='gen_'` or
+            ``'dis_'`` when training a GAN).
+
+            Also see docstring of parameter ``prefix`` in function
+            :func:`utils.cli_args.hypernet_args`.
+        no_weights (bool): Whether the hyper network should be generated without
+            internal weights (excluding task embeddings).
+        no_tembs (bool): Whether the hypernetwork should be generated without
+            internally maintained task embeddings.
+        temb_size (int, optional): If user config should be overwritten, then
+            this option can be used to specify the dimensionality of task
+            embeddings.
+
+    Returns:
+        The created hypernet model.
+    """
+    warn('Please use function "utils.sim_utils.get_hypernet" instead. As ' +\
+         'this function creates deprecated hypernetworks.',
+         DeprecationWarning)
+
+    if cprefix is None:
+        cprefix = ''
+
+    def gc(name):
+        """Get config value with that name."""
+        return getattr(config, '%s%s' % (cprefix, name))
+
+    hyper_chunks = misc.str_to_ints(gc('hyper_chunks'))
+    assert(len(hyper_chunks) in [1,2,3])
+    if len(hyper_chunks) == 1:
+        hyper_chunks = hyper_chunks[0]
+
+    hnet_arch = misc.str_to_ints(gc('hnet_arch'))
+    sa_hnet_filters = misc.str_to_ints(gc('sa_hnet_filters'))
+    sa_hnet_kernels = misc.str_to_ints(gc('sa_hnet_kernels'))
+    sa_hnet_attention_layers = misc.str_to_ints(gc('sa_hnet_attention_layers'))
+
+    hnet_act = misc.str_to_act(gc('hnet_act'))
+
+    if temb_size is None:
+        temb_size = gc('temb_size')
+
+    if isinstance(hyper_chunks, list): # Chunked self-attention hypernet
+        if len(sa_hnet_kernels) == 1:
+            sa_hnet_kernels = sa_hnet_kernels[0]
+        # Note, that the user can specify the kernel size for each dimension and
+        # layer separately.
+        elif len(sa_hnet_kernels) > 2 and \
+            len(sa_hnet_kernels) == gc('sa_hnet_num_layers') * 2:
+            tmp = sa_hnet_kernels
+            sa_hnet_kernels = []
+            for i in range(0, len(tmp), 2):
+                sa_hnet_kernels.append([tmp[i], tmp[i+1]])
+
+        if gc('hnet_dropout_rate') != -1:
+            warn('SA-Hypernet doesn\'t use dropout. Dropout rate will be ' +
+                 'ignored.')
+        if gc('hnet_act') != 'relu':
+            warn('SA-Hypernet doesn\'t support the other non-linearities ' +
+                 'than ReLUs yet. Option "%shnet_act" (%s) will be ignored.'
+                 % (cprefix, gc('hnet_act')))
+
+        hnet = SAHyperNetwork(mnet_shapes, num_tasks,
+            out_size=hyper_chunks,
+            num_layers=gc('sa_hnet_num_layers'),
+            num_filters=sa_hnet_filters,
+            kernel_size=sa_hnet_kernels,
+            sa_units=sa_hnet_attention_layers,
+            # Note, we don't use an additional hypernet for the remaining
+            # weights!
+            #rem_layers=hnet_arch,
+            te_dim=temb_size,
+            no_te_embs=no_tembs,
+            ce_dim=gc('emb_size'),
+            no_theta=no_weights,
+            # Batchnorm and spectral norma are not yet implemented.
+            #use_batch_norm=gc('hnet_batchnorm'),
+            #use_spectral_norm=gc('hnet_specnorm'),
+            # Droput would only be used for the additional network, which we
+            # don't use.
+            #dropout_rate=gc('hnet_dropout_rate'),
+            discard_remainder=True,
+            noise_dim=gc('hnet_noise_dim'),
+            temb_std=gc('temb_std')).to(device)
+
+    elif hyper_chunks != -1: # Chunked fully-connected hypernet
+        hnet = ChunkedHyperNetworkHandler(mnet_shapes, num_tasks,
+            chunk_dim=hyper_chunks, layers=hnet_arch,
+            activation_fn=hnet_act, te_dim=temb_size, no_te_embs=no_tembs,
+            ce_dim=gc('emb_size'), dropout_rate=gc('hnet_dropout_rate'),
+            noise_dim=gc('hnet_noise_dim'), no_weights=no_weights,
+            temb_std=gc('temb_std')).to(device)
+
+    else: # Fully-connected hypernet.
+        hnet = HyperNetwork(mnet_shapes, num_tasks, layers=hnet_arch,
+            te_dim=temb_size, no_te_embs=no_tembs, activation_fn=hnet_act,
+            dropout_rate=gc('hnet_dropout_rate'),
+            noise_dim=gc('hnet_noise_dim'), no_weights=no_weights,
+            temb_std=gc('temb_std')).to(device)
+
+    return hnet
+
+
+def calc_train_iter(num_train_samples, batch_size, num_iter=-1, epochs=-1):
+    """Calculate the number of training tierations.
+
+    If ``epochs`` is specified, this method will compute the total number of
+    training iterations and the number of iterations per epoch.
+
+    Otherwise, the number of training iterations is simply set to ``num_iter``.
+
+    Args:
+        num_train_samples (int): Numbe rof training samples in dataset.
+        batch_size (int): Mini-batch size during training.
+        num_iter (int): Number of training iterations. Only needs to be
+            specified if ``epochs`` is ``-1``.
+        epochs (int, optional): Number of training epochs.
+
+    Returns:
+        (tuple): Tuple containing:
+            
+        - **num_train_iter**: Total number of training iterations.
+        - **iter_per_epoch**: Number of training iterations per epoch. Is set to
+          ``-1`` in case ``epochs`` is unspecified.
+    """
+    assert num_iter != -1 or epochs != -1
+
+    iter_per_epoch = -1
+    if epochs == -1:
+        num_train_iter = num_iter
+    else:
+        assert epochs > 0
+        iter_per_epoch = int(np.ceil(num_train_samples / \
+                                     batch_size))
+        num_train_iter = epochs * iter_per_epoch
+
+    return num_train_iter, iter_per_epoch
+
+if __name__ == '__main__':
+    pass
+
+
