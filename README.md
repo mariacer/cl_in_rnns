@@ -7,20 +7,20 @@ For details on this approach please read [our paper](TODO).
 
 ## Copy Task Experiments
 
-You can find instructions on how to reproduce our experiments on all Copy Task variants and on how to use the corresponding code in the subfolder [sequential.copy](sequential.copy).
+You can find instructions on how to reproduce our experiments on all Copy Task variants and on how to use the corresponding code in the subfolder [sequential.copy](sequential/copy).
 
 
 ## Stroke MNIST Experiments
 
-You can find instructions on how to reproduce our Stroke MNIST experiments and on how to use the corresponding code in the subfolder [sequential.smnist](sequential.smnist).
+You can find instructions on how to reproduce our Stroke MNIST experiments and on how to use the corresponding code in the subfolder [sequential.smnist](sequential/smnist).
 
 ## Sequential Stroke MNIST Experiments
 
-You can find instructions on how to reproduce our Sequential Stroke MNIST experiments and on how to use the corresponding code in the subfolder [sequential.seq_smnist](sequential.seq_smnist).
+You can find instructions on how to reproduce our Sequential Stroke MNIST experiments and on how to use the corresponding code in the subfolder [sequential.seq_smnist](sequential/seq_smnist).
 
 ## Audioset Experiments
 
-You can find instructions on how to reproduce our Audioset experiments and on how to use the corresponding code in the subfolder [sequential.audioset](sequential.audioset).
+You can find instructions on how to reproduce our Audioset experiments and on how to use the corresponding code in the subfolder [sequential.audioset](sequential/audioset).
 
 
 ## Documentation
