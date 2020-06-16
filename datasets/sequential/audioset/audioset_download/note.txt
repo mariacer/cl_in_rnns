@@ -1,0 +1,3 @@
+When rerunning the preprocessing for the AudioSet dataset, download the file features.tar.gz from 
+	https://research.google.com/audioset/download.html 
+and extract it into this folder.
