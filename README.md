@@ -29,7 +29,7 @@ Please refer to the [README](docs/README.md) in the subfolder [docs](docs) for i
 
 ## Setup Python Environment
 
-We use [conda](https://www.anaconda.com/) to manage Python environments. To create an environment that already fulfills all pacakge requirements of this repository simply execute
+We use [conda](https://www.anaconda.com/) to manage Python environments. To create an environment that already fulfills all package requirements of this repository, simply execute
 
 ```console
 $ conda env create -f environment.yml
