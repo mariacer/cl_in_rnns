@@ -2,7 +2,7 @@
 
 A continual learning approach for recurrent neural networks that has the flexibility to learn a dedicated set of parameters, fine-tuned for every task, that doesn't require an increase in the number of trainable weights and is robust against catastrophic forgetting.
 
-For details on this approach please read [our paper](TODO).
+For details on this approach please read [our paper](https://arxiv.org/abs/2006.12109). Experiments on continual learning with hypernetworks using static data can be found in [this repository](https://github.com/chrhenning/hypercl).
 
 
 ## Copy Task Experiments
@@ -40,5 +40,10 @@ $ conda activate cl_rnn_env
 Please cite our paper if you use this code in your research project.
 
 ```
-TODO
+@article{ehret2020recurrenthypercl,
+  title={Continual Learning in Recurrent Neural Networks with Hypernetworks},
+  author={Benjamin Ehret and Christian Henning and Maria R. Cervera and Alexander Meulemans and Johannes von Oswald and Benjamin F. Grewe},
+  journal={arXiv preprint arXiv:2006.12109},
+  year={2020}
+}
 ```

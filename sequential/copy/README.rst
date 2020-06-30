@@ -54,23 +54,22 @@ The following run using a multi-head RNN leads to around 100.00% during and 100.
 
 .. code-block:: console
 
-    $ python3 train_copy.py  --hyper_chunks=2000 --temb_size=32 --emb_size=64 --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=1 --use_vanilla_rnn --hnet_arch="64,64,64" --use_cuda --hnet_all --orthogonal_hh_init --orthogonal_hh_reg=1.0 --permute_time
+    $ python3 train_copy.py --nh_chmlp_chunk_size=2500 --beta=10.0 --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.0005 --clip_grad_norm=1 --rnn_arch="256" --net_act=tanh --use_vanilla_rnn --nh_hnet_type=chunked_hmlp --nh_hmlp_arch="50,50" --nh_cond_emb_size=32 --nh_chunk_emb_size="32" --use_new_hnet --std_normal_temb=1.0 --std_normal_emb=0.1 --use_cuda --hnet_all --hnet_reg_batch_size=-1 --orthogonal_hh_reg=10.0 --first_task_input_len=5 --input_len_step=0 --input_len_variability=0 --permute_time
 
 If regularizing on a single randomly picked task at each loss evaluation, the following run obtains 100.00% final accuracy:
 
 .. code-block:: console
 
-    $ python3 train_copy.py --nh_chmlp_chunk_size=2500 --beta=1 --multi_head --num_tasks=5 --batch_size=128 --n_iter=25000 --lr=0.0005 --clip_grad_norm=1 --net_act=tanh --use_vanilla_rnn --nh_hnet_type=chunked_hmlp --nh_hmlp_arch="50,50" --nh_cond_emb_size=32 --nh_chunk_emb_size="32" --use_new_hnet --std_normal_temb=1.0 --std_normal_emb=0.1 --use_cuda --hnet_all --hnet_reg_batch_size=1 --orthogonal_hh_reg=1.0 --input_len_step=0 --input_len_variability=0 --permute_time
-
+    $ python3 train_copy.py --nh_chmlp_chunk_size=2500 --beta=1 --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.0005 --clip_grad_norm=1 --rnn_arch="256" --net_act=tanh --use_vanilla_rnn --nh_hnet_type=chunked_hmlp --nh_hmlp_arch="50,50" --nh_cond_emb_size=32 --nh_chunk_emb_size="16" --use_new_hnet --std_normal_temb=1.0 --std_normal_emb=0.1 --use_cuda --hnet_all --hnet_reg_batch_size=1 --orthogonal_hh_reg=10.0 --first_task_input_len=5 --input_len_step=0 --input_len_variability=0 --permute_time
 
 Online Elastic Weight Consolidation (Online EWC)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The following run on a multi-head RNN leads to around 99.91% during and 99.30% final accuracy:
+The following run on a multi-head RNN leads to around 99.93% during and 98.66% final accuracy:
 
 .. code-block:: console
 
-    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.001 --clip_grad_norm=1.0 --use_vanilla_rnn --use_cuda --random_seed=2 --use_ewc --ewc_gamma=1.0 --ewc_lambda=100.0 --n_fisher=-1  --orthogonal_hh_reg=0.01 --permute_time
+    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.001 --clip_grad_norm=1.0 --use_vanilla_rnn --use_cuda --use_ewc --ewc_gamma=1.0 --ewc_lambda=100.0 --n_fisher=-1  --orthogonal_hh_reg=0.01 --permute_time
 
 Synaptic Intelligence (SI)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -154,13 +153,13 @@ The following run on a multi-head RNN for ``r=1`` leads to around **100.00** % d
 
 .. code-block:: console
     
-    $ python3 train_copy.py --hyper_chunks=4000 --beta=1.0 --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=1 --use_vanilla_rnn --hnet_arch="64,64,32" --temb_size=32 --emb_size=32 --use_cuda --data_random_seed=12 --hnet_all --orthogonal_hh_reg=1.0 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_iter=1 --permute_xor_separate
+    $ python3 train_copy.py --hyper_chunks=4000 --beta=1.0 --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=1 --use_vanilla_rnn --hnet_arch="64,64,32" --temb_size=32 --emb_size=32 --use_cuda --hnet_all --orthogonal_hh_reg=1.0 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_iter=1 --permute_xor_separate
 
 The following run on a multi-head RNN for ``r=5`` leads to around **97.07** % during and **93.93** % final accuracy:
 
 .. code-block:: console
     
-    $ python3 train_copy.py --hyper_chunks=4000 --beta=10.0 --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=1 --use_vanilla_rnn --hnet_arch="64,64,32" --temb_size=32 --emb_size=32 --use_cuda --data_random_seed=12 --hnet_all --orthogonal_hh_reg=1.0 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_iter=5 --permute_xor_separate
+    $ python3 train_copy.py --hyper_chunks=4000 --beta=10.0 --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=1 --use_vanilla_rnn --hnet_arch="64,64,32" --temb_size=32 --emb_size=32 --use_cuda --hnet_all --orthogonal_hh_reg=1.0 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_iter=5 --permute_xor_separate
 
 Online Elastic Weight Consolidation (Online EWC)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -169,10 +168,10 @@ The following run on a multi-head RNN for ``r=1`` leads to around **99.65** % du
 
 .. code-block:: console
 
-    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=1 --use_vanilla_rnn --use_cuda --data_random_seed=12 --orthogonal_hh_init --orthogonal_hh_reg=10 --use_ewc --ewc_lambda=1000.0 --n_fisher=200 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_separate --permute_xor_iter=1
+    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=1 --use_vanilla_rnn --use_cuda --orthogonal_hh_init --orthogonal_hh_reg=10 --use_ewc --ewc_lambda=1000.0 --n_fisher=200 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_separate --permute_xor_iter=1
 
 The following run on a multi-head RNN for ``r=5`` leads to around **94.41** % during and **86.39** % final accuracy:
 
 .. code-block:: console
 
-    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.001 --clip_grad_norm=-1 --use_vanilla_rnn --use_cuda --data_random_seed=12 --orthogonal_hh_init --orthogonal_hh_reg=10 --use_ewc --ewc_lambda=1000.0 --n_fisher=200 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_separate --permute_xor_iter=5
+    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.001 --clip_grad_norm=-1 --use_vanilla_rnn --use_cuda --orthogonal_hh_init --orthogonal_hh_reg=10 --use_ewc --ewc_lambda=1000.0 --n_fisher=200 --permute_time --input_len_step=0 --input_len_variability=0 --permute_xor --permute_xor_separate --permute_xor_iter=5
