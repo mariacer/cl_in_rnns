@@ -51,7 +51,7 @@ def run():
     # setup env
     device, writer, logger = sutils.setup_environment(config)
     # get data handlers
-    dhandlers = ctu._generate_tasks(config, logger, experiment)
+    dhandlers = ctu._generate_tasks(config, logger, experiment=experiment)
 
     # Plot images.
     if config.show_plots:

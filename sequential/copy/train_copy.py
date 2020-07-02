@@ -50,7 +50,7 @@ def run():
     # setup env
     device, writer, logger = sutils.setup_environment(config)
     # get data handlers
-    dhandlers = ctu.generate_copy_tasks(config, writer)
+    dhandlers = ctu.generate_copy_tasks(config, logger, writer=writer)
     plc.visualise_data(dhandlers, config, device)
 
     if (config.permute_time or config.permute_width) and not \

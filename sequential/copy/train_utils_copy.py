@@ -33,11 +33,12 @@ from sequential.replay_utils import bernoulli_reconstruction_loss
 from sequential import train_utils_sequential as tuseq
 
 
-def generate_copy_tasks(config, writer):
+def generate_copy_tasks(config, logger, writer=None):
     """Generate a set of data handlers for copy tasks.
 
     Args:
         config (argparse.Namespace): Command-line arguments.
+        logger: Logger object.
         writer: Tensorboard writer.
 
     Returns:
@@ -53,7 +54,7 @@ def generate_copy_tasks(config, writer):
     # training samples depends on the chosen number of training iterations and
     # batchsize. In their case, the training set size per task must have been at
     # least 300,000 (given the specs that the authors provided after an email
-    # correspondence -> though, we still coudn't reproduce the results).
+    # correspondence -> though, we still couldn't reproduce the results).
     #
     # Anyway, we decided to use a fixed training set size to follow typical
     # Machine Learning habits (it also makes sense for EWC if one aims to
@@ -182,7 +183,8 @@ def generate_copy_tasks(config, writer):
             d.plot_samples('Training Samples - Task %d' % t,
                 d.get_train_inputs()[:6], outputs=d.get_train_outputs()[:6],
                 num_samples_per_row=3, show=False, equalize_size=False)
-            writer.add_figure('data', plt.gcf(), t, close=True)
+            if writer is not None:
+                writer.add_figure('data', plt.gcf(), t, close=True)
 
     if config.last_task_only:
         return [data_handlers[-1]]

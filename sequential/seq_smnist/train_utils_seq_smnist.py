@@ -28,12 +28,13 @@ import torch
 from data.timeseries.seq_smnist import SeqSMNIST
 from sequential import train_utils_sequential as tuseq
 
-def _generate_tasks(config, logger):
+def _generate_tasks(config, logger, writer=None):
     """Generate a set of data handlers for SMNIST task.
 
     Args:
         config: Command-line arguments.
         logger: Logger object.
+        writer: Tensorboard writer.
 
     Returns:
         (list): A list of data handlers for each task according to

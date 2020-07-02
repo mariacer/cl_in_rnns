@@ -26,8 +26,17 @@ Gather results of SMNIST for different random seeds.
 import __init__ # pylint: disable=unused-import
 
 from sequential import gather_random_seeds
+from sequential.audioset.train_args_audioset import parse_cmd_arguments
 
 if __name__=='__main__':
+
+    config = None
+    argv = {}
+    ## To design a specific config without loading a store one do as follows: 
+    # config = parse_cmd_arguments(mode='split_audioset', default=True)
+    # argv = {'multi_head':True, 'num_tasks':10}
+    for key, value in argv.items():
+       setattr(config, key, value)
 
     # Define items of the config file that might need to be ignored when 
     # launching the hpsearch code to gather random seeds.
@@ -37,4 +46,4 @@ if __name__=='__main__':
     }
 
     gather_random_seeds.run('sequential.audioset.hp_search_audioset', \
-        ignore_kwds=ignore_kwds, forced_params=forced_params)
+        ignore_kwds=ignore_kwds, forced_params=forced_params, config=config)

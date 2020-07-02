@@ -34,13 +34,16 @@ from mnets.classifier_interface import Classifier
 from sequential.replay_utils import gauss_reconstruction_loss
 from sequential import train_utils_sequential as tuseq
 
-def _generate_tasks(config, logger, experiment):
+def _generate_tasks(config, logger, experiment='split_smnist', writer=None):
     """Generate a set of data handlers for SMNIST task.
 
     Args:
         config: Command-line arguments.
         logger: Logger object.
-        experiment (str): Type of experiment.
+        experiment (str): Type of experiment. See argument `experiment` of
+            function :func:`probabilistic.prob_mnist.train_bbb.run` or
+            :func:`probabilistic.prob_cifar.train_avb.run`.
+        writer: Tensorboard writer.
 
     Returns:
         (list): A list of data handlers for each task according to

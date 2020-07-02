@@ -31,13 +31,16 @@ from mnets.classifier_interface import Classifier
 from sequential.replay_utils import gauss_reconstruction_loss
 from sequential import train_utils_sequential as tuseq
 
-def _generate_tasks(config, logger, experiment):
+def _generate_tasks(config, logger, experiment='split_audioset', writer=None):
     """Generate a set of data handlers for Audioset task.
 
     Args:
         config: Command-line arguments.
         logger: Logger object.
-        experiment (str): Type of experiment.
+        writer: Tensorboard writer.
+        experiment (str,optional): Type of experiment. See argument `experiment` 
+            of function :func:`probabilistic.prob_mnist.train_bbb.run` or
+            :func:`probabilistic.prob_cifar.train_avb.run`.
 
     Returns:
         (list): A list of data handlers for each task according to

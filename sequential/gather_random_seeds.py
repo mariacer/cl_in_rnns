@@ -178,16 +178,10 @@ def write_new_grid_to_text(filename, config, location, random_seeds, cmd_args,
     """
     if kwds == None:
         kwds = list(vars(config).keys())
-    kwds.remove('tnet_weights')
-    kwds.remove('out_dir')
-    kwds.remove('classification')
-    kwds.remove('input_dim')
-    kwds.remove('out_dim')
-    kwds.remove('hnet_out')
-    if 'compression_ratio' in kwds:
-        kwds.remove('compression_ratio')
-    if 'coresets' in kwds:
-        kwds.remove('coresets')
+    for key in ['tnet_weights', 'out_dir', 'classification', 'input_dim', \
+            'out_dim', 'hnet_out', 'compression_ratio', 'coresets']:
+        if key in kwds:
+            kwds.remove(key)
 
     # Make sure we don't use the same seed as in the original run.
     if config.random_seed in random_seeds:

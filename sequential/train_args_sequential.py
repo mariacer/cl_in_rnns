@@ -282,7 +282,7 @@ def rnn_args(parser, drnn_arch='256', dnet_act='tanh'):
     agroup.add_argument('--net_act', type=str, default=dnet_act,
                         help='Activation function used in the network. ' +
                              'Default: %(default)s.',
-                        choices=['relu', 'tanh'])
+                        choices=['relu', 'tanh', 'linear'])
     agroup.add_argument('--use_vanilla_rnn', action='store_true',
                         help='Whether vanilla rnn cells should be used. ' +
                              'Otherwise, LSTM cells are used.')

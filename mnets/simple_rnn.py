@@ -155,10 +155,11 @@ class SimpleRNN(nn.Module, MainNetInterface):
         self._bptt_depth = -1
 
         # FIXME Arbitrary restriction.
-        if isinstance(activation, (torch.nn.ReLU, torch.nn.Tanh)):
+        if activation is None or isinstance(activation, (torch.nn.ReLU, \
+                torch.nn.Tanh)):
             self._a_fun = activation
         else:
-            raise ValueError('Only relu and tanh nonlinearities are ' + \
+            raise ValueError('Only linear, relu and tanh activations are ' + \
                              'allowed for recurrent networks.')
 
         if len(rnn_layers) == 0:
@@ -1072,7 +1073,8 @@ Recurrent_neural_network#Elman_networks_and_Jordan_networks>`__.
                     weights=cm_weights, ckpt_id=ckpt_id)
 
         # Compute activation.
-        h_t = self._a_fun(h_t)
+        if self._a_fun is not None:
+            h_t = self._a_fun(h_t)
 
         # Context-dependent modulation (post-activation).
         if use_cm and self._context_mod_post_activation:
@@ -1094,7 +1096,8 @@ Recurrent_neural_network#Elman_networks_and_Jordan_networks>`__.
                     weights=cm_weights, ckpt_id=ckpt_id)
 
         # Compute activation.
-        y_t = self._a_fun(y_t)
+        if self._a_fun is not None:
+            y_t = self._a_fun(y_t)
 
         # Context-dependent modulation (post-activation).
         if use_cm and self._context_mod_post_activation:
@@ -1198,7 +1201,10 @@ in-pytorch-lstms-in-depth-part-1/
                     weights=cm_weights, ckpt_id=ckpt_id)
 
         # Compute h states.
-        h_t = o_t * self._a_fun(c_t_mod)
+        if self._a_fun is not None:
+            h_t = o_t * self._a_fun(c_t_mod)
+        else:
+            h_t = o_t * c_t_mod
 
         # Context-dependent modulation (post-activation).
         # FIXME Christian: Shouldn't we apply the output gate `o_t` after
