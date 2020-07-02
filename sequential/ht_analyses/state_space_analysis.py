@@ -67,7 +67,8 @@ import warnings
 
 import sequential.ht_analyses.state_space_plotting as ssp
 from sequential.ht_analyses.pca_utils import get_expl_var, \
-    get_expl_var_per_ts, get_expl_var_across_tasks
+    get_expl_var_per_ts, get_expl_var_across_tasks, \
+    get_expl_var_across_tasks_cum
 import sequential.plotting_sequential as plc
 import sequential.train_utils_sequential as stu
 from sequential.train_sequential import test
@@ -409,6 +410,16 @@ def analyse_single_run(out_dir, device, writer, logger, analysis_kwd,
         results['kexpl_var_accross_tasks'] = kexpl_var_accross_tasks
         results['n_pcs_considered_across_tasks'] = n_pcs_considered
 
+        # Compute explained variance when projecting hidden states of other
+        # tasks into the pcs of previously learned tasks.
+        expl_var_accross_tasks, kexpl_var_accross_tasks, n_pcs_considered = \
+            get_expl_var_across_tasks_cum(all_during_act, n_samples=n_samples, 
+                timesteps=timesteps_for_analysis, stop_bit=stop_bit,
+                do_kernel_pca=False)
+        results['expl_var_accross_tasks_cum'] = expl_var_accross_tasks
+        results['kexpl_var_accross_tasks_cum'] = kexpl_var_accross_tasks
+        results['n_pcs_considered_across_tasks_cum'] = n_pcs_considered
+
         # Store pickle results.
         with open(out_dir + '/pca_results.pickle', 'wb') as handle:
             pickle.dump(results, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -535,6 +546,8 @@ def run(config, *args, copy_task=True):
         ssp.plot_dimension_vs_task(results, seed_groups, path=results_dir)
         ssp.plot_dimension_vs_task(results, seed_groups, path=results_dir, 
             onto_task_1=True)
+        ssp.plot_dimension_vs_task(results, seed_groups, path=results_dir, 
+            onto_task_1=True, cum=True)
         ssp.plot_dimension_vs_task(results, seed_groups, path=results_dir)
         ssp.print_dimension_vs_task(results, seed_groups, p_var=cmd_args.p_var)
         if copy_task:

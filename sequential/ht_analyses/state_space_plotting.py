@@ -84,7 +84,7 @@ def plot_fisher_vs_task(results, seed_groups, task_id=-1, path='',
 
 
 def plot_dimension_vs_task(results, seed_groups, label=None, color='b', 
-        task_id=-1, path='', kernel=False, onto_task_1=False):
+        task_id=-1, path='', kernel=False, onto_task_1=False, cum=False):
     """Plot hidden dimensionality vs. task.
 
     If the results and seed groups of a second experiment are provided, both
@@ -111,6 +111,9 @@ def plot_dimension_vs_task(results, seed_groups, label=None, color='b',
             projecting into the pcs of the first task is plotted. Else, the
             explained variance when projecting onto the tasks native pcs
             are plotted.
+        cum (boolean, optional): If True, the pcs to project onto are computed
+            cumulatively using data from all previously learned tasks. Else,
+            only task 1 is considered.
 
     """
     if isinstance(results, list):
@@ -134,13 +137,15 @@ def plot_dimension_vs_task(results, seed_groups, label=None, color='b',
     assert len(seed_groups[0].keys()) == 1 
 
     def plot_experiment(results, seed_groups, task_id=-1, color='b', label=None,
-            plot_all_tasks=False, n_pcs_considered=None, kernel=False):
+            plot_all_tasks=False, n_pcs_considered=None, kernel=False, cum=False):
         """Plot the explained variance in a single experiment."""
         key = 'expl_var'
         if kernel:
             key = 'kexpl_var'
         if onto_task_1:
             key += '_accross_tasks'
+        if cum:
+            key += '_cum'
         num_hidden = len(results[list(results.keys())[0]][key][task_id])
         num_tasks = results[list(results.keys())[0]]['num_tasks']
         pi = list(seed_groups.keys())[0]
@@ -186,12 +191,12 @@ def plot_dimension_vs_task(results, seed_groups, label=None, color='b',
     if num_experiments == 1:
         plot_experiment(results[0], seed_groups[0], task_id=task_id, 
             color=color[0], label=label[0], plot_all_tasks=True,
-            n_pcs_considered=n_pcs_considered, kernel=kernel)
+            n_pcs_considered=n_pcs_considered, kernel=kernel, cum=cum)
     if num_experiments > 1:
         for ne in range(num_experiments):
             plot_experiment(results[ne], seed_groups[ne], task_id=task_id, 
                 color=color[ne], label=label[ne], 
-                n_pcs_considered=n_pcs_considered, kernel=kernel)
+                n_pcs_considered=n_pcs_considered, kernel=kernel, cum=cum)
     plt.legend()
     xlabel = 'number of pcs'
     if onto_task_1:
@@ -204,6 +209,8 @@ def plot_dimension_vs_task(results, seed_groups, label=None, color='b',
     type_plot = '_vs_task'
     if onto_task_1:
         type_plot = '_onto_task1'
+    if cum:
+        suffix += '_cum'
     plt.savefig(os.path.join(path, 'dimension%s%s.pdf'%(type_plot, suffix)))
 
 
