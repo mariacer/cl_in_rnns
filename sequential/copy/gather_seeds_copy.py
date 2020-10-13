@@ -34,5 +34,5 @@ if __name__=='__main__':
         'during_acc_criterion': '-1'
     }
 
-    gather_random_seeds.run('sequential.copy.hp_search_copy', 
+    gather_random_seeds.run('sequential.copy.hp_search_copy',
         forced_params=forced_params)

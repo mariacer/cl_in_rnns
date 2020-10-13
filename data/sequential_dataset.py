@@ -178,7 +178,7 @@ class SequentialDataset(Dataset):
         return arr
 
     def input_to_torch_tensor(self, x, device, mode='inference',
-                              force_no_preprocessing=False):
+                              force_no_preprocessing=False, sample_ids=None):
         """This method can be used to map the internal numpy arrays to PyTorch
         tensors.
 
@@ -193,12 +193,15 @@ class SequentialDataset(Dataset):
             and ``in_shape`` refers to the input feature shape, see
             :attr:`data.dataset.Dataset.in_shape`.
         """
+        # FIXME Reduce padding within mini-batch if `sample_ids` is given?
+        # Could be problematic if input and output seq have different seq
+        # lengths but are padded to the same length.
         out_tensor = self._flatten_array(x, ts_dim_first=True, reverse=True,
                                          feature_shape=self.in_shape)
         return torch.from_numpy(out_tensor).float().to(device)
 
     def output_to_torch_tensor(self, y, device, mode='inference',
-                              force_no_preprocessing=False):
+                              force_no_preprocessing=False, sample_ids=None):
         """Similar to method :meth:`input_to_torch_tensor`, just for dataset
         outputs.
 
@@ -213,12 +216,16 @@ class SequentialDataset(Dataset):
             size and ``out_shape`` refers to the output feature shape, see
             :attr:`data.dataset.Dataset.out_shape`.
         """
+        # FIXME Reduce padding within mini-batch if `sample_ids` is given?
+        # Could be problematic if input and output seq have different seq
+        # lengths but are padded to the same length.
         out_tensor = self._flatten_array(y, ts_dim_first=True, reverse=True,
                                          feature_shape=self.out_shape)
-        if isinstance(out_tensor, torch.Tensor):
-            return out_tensor.float().to(device)
-        else:
-            return torch.from_numpy(out_tensor).float().to(device)
+        # FIXME Delete commented code.
+        #if isinstance(out_tensor, torch.Tensor):
+        #    return out_tensor.float().to(device)
+        #else:
+        return torch.from_numpy(out_tensor).float().to(device)
 
 if __name__ == '__main__':
     pass

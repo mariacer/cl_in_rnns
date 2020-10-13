@@ -34,6 +34,11 @@ API
     :undoc-members:
     :show-inheritance:
 
+.. automodule:: hnets.hnet_container
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 .. automodule:: hnets.mlp_hnet
     :members:
     :undoc-members:

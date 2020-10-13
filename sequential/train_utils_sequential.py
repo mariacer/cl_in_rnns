@@ -36,11 +36,14 @@ from torch.nn import functional as F
 from warnings import warn
 
 from data.sequential_dataset import SequentialDataset
+from mnets.bi_rnn import BiRNN
 from mnets.simple_rnn import SimpleRNN
+from hnets.chunked_hyper_model import ChunkedHyperNetworkHandler
 from hnets.mlp_hnet import HMLP
 from hnets.chunked_mlp_hnet import ChunkedHMLP
 from hnets.structured_mlp_hnet import StructuredHMLP
 from hnets.chunked_deconv_hnet import ChunkedHDeconv
+from hnets.hnet_container import HContainer
 import sequential.plotting_sequential as plc
 from sequential.rnn_chunking import simple_rnn_chunking
 from hnets.hyper_model import HyperNetwork
@@ -48,7 +51,7 @@ import utils.misc as misc
 from utils import sim_utils as sutils
 from utils import torch_ckpts as tckpt
 
-def generate_networks(config, data_handlers, device):
+def generate_networks(config, shared, data_handlers, device):
     """Create the target network and potential auxilliary networks.
 
     Simple helper function to create the classifier using
@@ -56,7 +59,9 @@ def generate_networks(config, data_handlers, device):
     decoder.
 
     Args:
-        config: Command-line arguments.
+        config (argparse.Namespace): Command-line arguments.
+        shared (argparse.Namespace): Miscellaneous information shared across
+            functions.
         data_handlers: List of data handlers, one for each task. Needed to
             extract the number of inputs/outputs of the main network and to
             infer the number of tasks.
@@ -71,8 +76,10 @@ def generate_networks(config, data_handlers, device):
         - **dnet** (optional): The replay decoder. If no replay decoder is
           needed, the return value is zero.
     """
+    assert hasattr(shared, 'feature_size')
+
     ### Generate main net ###
-    tnet = _generate_classifier(config, data_handlers, device)
+    tnet = _generate_classifier(config, shared, data_handlers, device)
 
     ### Generate replay decoder ###
     dnet = None
@@ -86,7 +93,7 @@ def generate_networks(config, data_handlers, device):
         else:
             in_shape = [config.latent_dim]
         # Assuming the input shape is the same for all tasks.
-        n_out = data_handlers[0].in_shape[0]
+        n_out = shared.feature_size
         if config.input_task_identity:
             # FIXME Should not allow the option together with replay or properly
             # handle the reconstruction of a 1-hot encoding?
@@ -180,6 +187,9 @@ def _get_new_hnet(config, device, target_net, hyper_shapes):
     num_per_chunk = None
     assembly_fct = None
     if config.nh_hnet_type == 'structured_hmlp':
+        if config.nh_separate_out_head:
+            raise NotImplementedError('Option "nh_separate_out_head" not ' +
+                                      'compatible with structured hnets.')
         nh_shmlp_chunk_sizes = misc.str_to_ints(config.nh_shmlp_chunk_sizes)
         if len(nh_shmlp_chunk_sizes) == 1:
             nh_shmlp_chunk_sizes = nh_shmlp_chunk_sizes[0]
@@ -192,13 +202,22 @@ def _get_new_hnet(config, device, target_net, hyper_shapes):
             print('Layer %d: %d chunk(s) of shape: %s.' % (i, num_per_chunk[i],
                   s))
 
+    # If requested, exclude output weights before building hypernetwork.
+    if config.nh_separate_out_head:
+        ow_masks = target_net.get_output_weight_mask()
+        ow_inds = [i for i in range(len(ow_masks)) if ow_masks[i] is not None]
+        rw_inds = [i for i in range(len(ow_masks)) if ow_masks[i] is None]
+
+        orig_hshapes = list(hyper_shapes)
+        ow_shapes = [hyper_shapes[i] for i in ow_inds]
+        hyper_shapes = [hyper_shapes[i] for i in rw_inds]
+
     hnet = sutils.get_hypernet(config, device, config.nh_hnet_type,
         hyper_shapes, config.num_tasks, no_cond_weights=False,
         no_uncond_weights=False, uncond_in_size=0,
         shmlp_chunk_shapes=chunk_shapes, shmlp_num_per_chunk=num_per_chunk,
-        shmlp_assembly_fct=assembly_fct, cprefix='nh_')
-
-    config.compression_ratio = hnet.num_params / hnet.num_outputs
+        shmlp_assembly_fct=assembly_fct,
+        verbose=not config.nh_separate_out_head, cprefix='nh_')
 
     ### Initialization ###
     # Initialize task embeddings.
@@ -235,9 +254,34 @@ def _get_new_hnet(config, device, target_net, hyper_shapes):
             raise NotImplementedError('No hyperfan-init implemented for ' +
                 'hypernetwork of type %s.' % type(hnet))
 
+    ### Build hypernetwork container ###
+    # If requested, add task-specific output heads to hypernetwork.
+    if config.nh_separate_out_head:
+        hnet_rem = hnet
+        def assembly_fct(list_of_hnet_tensors, uncond_tensors, cond_tensors):
+            assert len(list_of_hnet_tensors) == 1
+            hnet_tensors = list_of_hnet_tensors[0]
+            all_tensors = []
+            cind, hind = 0, 0
+            for i in range(len(orig_hshapes)):
+                if i in ow_inds:
+                    all_tensors.append(cond_tensors[cind])
+                    cind += 1
+                else:
+                    all_tensors.append(hnet_tensors[hind])
+                    hind += 1
+            return all_tensors
+
+        hnet = HContainer(orig_hshapes, assembly_fct, hnets=[hnet_rem],
+                          cond_param_shapes=ow_shapes,
+                          num_cond_embs=config.num_tasks).to(device)
+        # FIXME We might want to initialize output weights differently.
+
+    config.compression_ratio = hnet.num_params / hnet.num_outputs
+
     return hnet
 
-def _generate_classifier(config, data_handlers, device):
+def _generate_classifier(config, shared, data_handlers, device):
     """Create a RNN network that will be trained on multiple tasks.
 
     Args:
@@ -246,14 +290,15 @@ def _generate_classifier(config, data_handlers, device):
     Returns:
         A RNN instance.
     """
-    n_in = data_handlers[0].in_shape[0]
+    n_in = shared.feature_size
     n_out = data_handlers[0].out_shape[0]
 
     # Sanity check: for now, we only support homogeneous output head sizes.
     for dh in data_handlers:
         assert len(dh.out_shape) == 1
         assert len(dh.in_shape) == 1
-        assert dh.in_shape[0] == n_in
+        # Sanity check below not applicable anymore.
+        #assert dh.in_shape[0] == n_in
         assert dh.out_shape[0] == n_out
 
     max_num_timesteps = None
@@ -262,6 +307,11 @@ def _generate_classifier(config, data_handlers, device):
         for i in range(1, len(data_handlers)):
             if data_handlers[i].max_num_ts_in > max_num_timesteps:
                 max_num_timesteps = data_handlers[i].max_num_ts_in
+    else:
+        raise NotImplementedError()
+        assert isinstance(data_handlers[0], CognitiveTasks)
+        # FIXME SequentialDataset interface not yet implemented.
+        max_num_timesteps = 100
 
     # If required, add a set of input units to allow a one-hot-encoding of the 
     # task identity.
@@ -312,31 +362,68 @@ def _generate_classifier(config, data_handlers, device):
         # decoder will be hypernet protected.
         no_tnet_weights = False
 
-    # Importantly, the mnet is always created with internal weights
-    # (`no_weights == False`). If context-mod is used, then the context-mod
-    # weights will come out of the hypernetwork, except if the user requests to
-    # checkpoint them.
-    net = SimpleRNN(n_in=n_in, rnn_layers=n_hidden, fc_layers_pre=pre_fc_layers,
-        fc_layers=[*post_fc_layers, n_out],
-        no_weights=no_tnet_weights,
-        activation=misc.str_to_act(config.net_act),
-        use_lstm=not config.use_vanilla_rnn,
-        # Note, due to an implementation mismatch, the SimpleRNN initially used
-        # always this init rather than the official PyTorch one. To not break
-        # all prior hpsearch results, we decided to keep the init this way.
-        kaiming_rnn_init=True,
-        use_context_mod=use_cm_layers,
-        context_mod_inputs=config.context_mod_inputs,
-        no_last_layer_context_mod=config.no_context_mod_outputs,
-        context_mod_post_activation=config.context_mod_post_activation,
-        context_mod_no_weights=context_mod_no_weights,
-        context_mod_num_ts=max_num_timesteps if config.context_mod_per_ts \
+    cm_args_in_out = {
+        'context_mod_inputs': config.context_mod_inputs,
+        'no_last_layer_context_mod': config.no_context_mod_outputs,
+    }
+    cm_args = {
+        'use_context_mod': use_cm_layers,
+        'context_mod_post_activation': config.context_mod_post_activation,
+        'context_mod_no_weights': context_mod_no_weights,
+        'context_mod_gain_offset': config.offset_gains,
+        'context_mod_gain_softplus': not config.dont_softplus_gains,
+    }
+    cm_args_rnn_only = {
+        'context_mod_num_ts': max_num_timesteps if config.context_mod_per_ts \
             else -1,
-        context_mod_separate_layers_per_ts=not context_mod_no_weights
+        'context_mod_separate_layers_per_ts': not context_mod_no_weights
             or config.use_masks,
-        context_mod_gain_offset=config.offset_gains,
-        context_mod_gain_softplus=not config.dont_softplus_gains,
-        use_bias=True).to(device)
+    }
+
+    if hasattr(config, 'use_bidirectional_net') and \
+            config.use_bidirectional_net:
+        last_n_hidden = n_hidden[-1] if len(post_fc_layers) == 0 else \
+            post_fc_layers[-1]
+
+        net = BiRNN(
+            rnn_args=dict({
+                'n_in': n_in,
+                'rnn_layers': n_hidden,
+                'fc_layers_pre': pre_fc_layers,
+                'fc_layers': post_fc_layers,
+                'activation': misc.str_to_act(config.net_act),
+                'use_lstm': not config.use_vanilla_rnn,
+                'use_bias': True,
+                'context_mod_inputs': config.context_mod_inputs,
+            }, **cm_args, **cm_args_rnn_only),
+            mlp_args=dict(**{
+                'n_in': 2 * last_n_hidden,
+                'n_out': n_out,
+                'hidden_layers': [],
+                'activation_fn': misc.str_to_act(config.net_act),
+                'use_bias': True,
+                'no_last_layer_context_mod': config.no_context_mod_outputs,
+            }, **cm_args),
+            no_weights=no_tnet_weights
+        ).to(device)
+    else:
+        net = SimpleRNN(n_in=n_in,
+            rnn_layers=n_hidden,
+            fc_layers_pre=pre_fc_layers,
+            fc_layers=[*post_fc_layers, n_out],
+            no_weights=no_tnet_weights,
+            activation=misc.str_to_act(config.net_act),
+            use_lstm=not config.use_vanilla_rnn,
+            # Note, due to an implementation mismatch, the SimpleRNN initially
+            # used always this init rather than the official PyTorch one. To not
+            # break all prior hpsearch results, we decided to keep the init this
+            # way.
+            kaiming_rnn_init=True,
+            use_bias=True,
+            **cm_args_in_out,
+            **cm_args,
+            **cm_args_rnn_only
+        ).to(device)
 
     if config.orthogonal_hh_init:
         net.init_hh_weights_orthogonal()
@@ -351,6 +438,9 @@ def save_activations(config, activations, targets=None, modulations=None,
     Save the hidden activity for each of the tasks, when evaluated on the
     test set after training on all tasks. The targets for the
     tasks are also stored, as these might be needed for the analyses.
+
+    For the context-modulation setting, this data will then be analyzed in
+    another script :mod:`bio.cognet.analyse_activations`.
 
     Args:
         config: Command-line arguments.
@@ -380,7 +470,7 @@ def log_results(test_results, config, logger):
     """Log the results.
 
     Args:
-        test_results (np.array): The results to be logged. Either losses or 
+        test_results (np.array): The results to be logged. Either losses or
             accuracies (for classification tasks).
         config: The command line arguments.
         logger: Console (and file) logger.
@@ -408,7 +498,7 @@ def log_results(test_results, config, logger):
                 np.mean(final_results)))
 
 
-def save_performance_summary(config, test_results, train_loss,
+def save_performance_summary(config, shared, test_results, train_loss,
                              summary_filename='', summary_keywords=[],
                              finished_training=False):
     """Save a summary of the test results.
@@ -420,6 +510,8 @@ def save_performance_summary(config, test_results, train_loss,
 
     Args:
         config: Command-line arguments.
+        shared (argparse.Namespace): Miscellaneous information shared across
+            functions.
         test_results: 2d numpy array (n_tasks x n_tasks) containing the test
             results after every training step. Either accuracy or loss.
         train_loss: list of dictionaries containing the training losses for all
@@ -457,7 +549,16 @@ def save_performance_summary(config, test_results, train_loss,
 
     # TODO horribly ugly code. Fix.
     if not config.multitask:
-        results_summary = {
+        results_summary = dict()
+        if hasattr(shared, 'f_scores'):
+            results_summary = dict(**results_summary, **{
+                'mean_final_fscore': [np.mean(shared.f_scores[-1, :])],
+                'mean_during_fscore': [np.mean(np.diagonal(shared.f_scores))],
+                'final_fscore': [shared.f_scores[-1, :]],
+                'during_fscore': [np.diagonal(shared.f_scores)],
+            })
+
+        results_summary = dict(**results_summary, **{
             'mean_final_%s'%var_name: [np.mean(test_results[-1, :])],
             'std_final_%s'%var_name: [np.std(test_results[-1, :])],
             'mean_during_%s'%var_name: [np.mean(np.diagonal(test_results))],
@@ -466,14 +567,21 @@ def save_performance_summary(config, test_results, train_loss,
             'min_during_%s'%var_name: [np.min(np.diagonal(test_results))],
             'during_%s'%var_name:  [np.diagonal(test_results)],
             'final_%s'%var_name: [test_results[-1, :]],
-        }
+        })
     else:
-        results_summary = {
+        results_summary = dict()
+        if hasattr(shared, 'f_scores'):
+            results_summary = dict(**results_summary, **{
+                'mean_final_fscore': [np.mean(shared.f_scores[-1, :])],
+                'final_fscore': [shared.f_scores[-1, :]],
+            })
+
+        results_summary = dict(**results_summary, **{
             'mean_final_%s'%var_name: [np.mean(test_results)],
             'std_final_%s'%var_name: [np.std(test_results)],
             'min_final_%s'%var_name: [np.min(test_results)],
             'final_%s'%var_name: [test_results],
-        }
+        })
     results_summary['rnn_arch'] = ['"%s"'%config.rnn_arch]
     results_summary['hnet_arch'] = [np.nan]
     results_summary['compression_ratio'] = [np.nan]
@@ -553,6 +661,9 @@ def sequential_nll(loss_type='ce', reduction='sum'):
 
     Similar to function :func:`utils.ewc_regularizer.compute_fisher` (cmp.
     argument ``time_series``), we adopt the following decomposition of the joint
+    (also compare docstring of function
+    :func:`bio.cognitive.train_utils_cognitive.cognet_mse_nll`, which is a
+    specialized implementation of this function)
 
     .. math::
 
@@ -897,8 +1008,10 @@ def generate_binary_masks(config, device, tnet):
 
     # For simplicity, we assume the following is true, otherwise, the creation
     # of masks would be unnecessarily complicated.
-    assert tnet._context_mod_num_ts == -1 or \
-        tnet._context_mod_separate_layers_per_ts
+    if isinstance(tnet, SimpleRNN):
+        # FIXME We should also ensure that this is the case for BiRNNs!
+        assert tnet._context_mod_num_ts == -1 or \
+            tnet._context_mod_separate_layers_per_ts
 
     # Note, we don't want to silence inputs or permanently shut-off output
     # neurons.
@@ -949,7 +1062,7 @@ def extract_hh_weights(mnet, hnet_out=None):
         hnet_out (list, optional): If applicable, the hypernetwork output.
 
     Returns:
-        (list): A list with the extraced weight tensors.
+        (list): A list with the extracted weight tensors.
     """
     ret = []
 
@@ -1034,26 +1147,30 @@ def ckpt_filenames(out_dir, task_id=None, train_iter=None):
         - **ckpt_mnet_fn** (str): Checkpoint filename for main network
         - **ckpt_hnet_fn** (str): Checkpoint filename for hypernetwork
         - **ckpt_dnet_fn** (str): Checkpoint filename for decoder network.
+        - **ckpt_wembs_fn** (str): Checkpoint filename for word embeddings.
     """
     ckpt_dir = os.path.join(out_dir, 'checkpoints')
     if task_id is None and train_iter is None:
         ckpt_mnet_fn = os.path.join(ckpt_dir, 'final_mnet')
         ckpt_hnet_fn = os.path.join(ckpt_dir, 'final_hnet')
         ckpt_dnet_fn = os.path.join(ckpt_dir, 'final_dnet')
+        ckpt_wembs_fn = os.path.join(ckpt_dir, 'final_wembs')
     elif train_iter is None:
         ckpt_mnet_fn = os.path.join(ckpt_dir, 'mnet_task_%d' % task_id)
         ckpt_hnet_fn = os.path.join(ckpt_dir, 'hnet_task_%d' % task_id)
         ckpt_dnet_fn = os.path.join(ckpt_dir, 'dnet_task_%d' % task_id)
+        ckpt_wembs_fn = os.path.join(ckpt_dir, 'wembs_task_%d' % task_id)
     else:
         ext = '' if task_id is None else '_%d' % task_id
         ckpt_mnet_fn = os.path.join(ckpt_dir, 'current_mnet%s' % ext)
         ckpt_hnet_fn = os.path.join(ckpt_dir, 'current_hnet%s' % ext)
         ckpt_dnet_fn = os.path.join(ckpt_dir, 'current_dnet%s' % ext)
+        ckpt_wembs_fn = os.path.join(ckpt_dir, 'current_wembs%s' % ext)
 
-    return ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn
+    return ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn, ckpt_wembs_fn
 
 def save_models(out_dir, logger, performance, mnet, hnet=None, dnet=None,
-                task_id=None, train_iter=None, **kwargs):
+                wembs=None, task_id=None, train_iter=None, **kwargs):
     """Checkpoint the main and (if existing) the current hypernet.
 
     Args:
@@ -1066,6 +1183,8 @@ def save_models(out_dir, logger, performance, mnet, hnet=None, dnet=None,
         mnet: The main network.
         hnet (optional): The hypernetwork.
         dnet (optional): The decoder (replay) network.
+        wembs (list, optional): List of instances of class
+            :class:`sequential.embedding_utils.WordEmbLookup`.
         task_id (int, optional): Task ID of the last task the models have been
             trained on. Will be integrated into the filenames.
         train_iter (int, optional): The current training iteration. If provided,
@@ -1075,8 +1194,8 @@ def save_models(out_dir, logger, performance, mnet, hnet=None, dnet=None,
         **kwargs: Keyword arguments passed to function
             :func:`utils.torch_ckpts.save_checkpoint`.
     """
-    ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn = ckpt_filenames(out_dir,
-        task_id=task_id, train_iter=train_iter)
+    ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn, ckpt_wembs_fn = ckpt_filenames( \
+        out_dir, task_id=task_id, train_iter=train_iter)
 
     if task_id is None and train_iter is None:
         perf_key = 'avg_final_acc'
@@ -1103,14 +1222,23 @@ def save_models(out_dir, logger, performance, mnet, hnet=None, dnet=None,
             ckpt_hnet_fn, performance, train_iter=train_iter,
             timestamp=ts, **kwargs)
     if dnet is not None:
-        logger.debug('Checkpointing decider network in %s ...' % ckpt_dnet_fn)
+        logger.debug('Checkpointing decoder network in %s ...' % ckpt_dnet_fn)
         tckpt.save_checkpoint({'state_dict': dnet.state_dict(),
                                **perf_dict},
             ckpt_dnet_fn, performance, train_iter=train_iter,
             timestamp=ts, **kwargs)
+    if wembs is not None:
+        # FIXME no need to always checkpoint all word embeddings, as only the
+        # ones from the current task have been modified.
+        tmp_wembs = torch.nn.ModuleList(wembs)
+        logger.debug('Checkpointing word embeddings in %s ...' % ckpt_wembs_fn)
+        tckpt.save_checkpoint({'state_dict': tmp_wembs.state_dict(),
+                               **perf_dict},
+            ckpt_wembs_fn, performance, train_iter=train_iter,
+            timestamp=ts, **kwargs)
 
 
-def load_models(out_dir, device, logger, mnet, hnet=None, dnet=None,
+def load_models(out_dir, device, logger, mnet, hnet=None, dnet=None, wembs=None,
                 task_id=None, train_iter=None, return_models=False):
     """Load checkpointed networks.
 
@@ -1135,13 +1263,14 @@ def load_models(out_dir, device, logger, mnet, hnet=None, dnet=None,
           returned. If ``return_models`` is ``False``, then only ``score`` is 
           returned.
     """
-    ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn = ckpt_filenames(out_dir,
-        task_id=task_id, train_iter=train_iter)
+    ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn, ckpt_wembs_fn = ckpt_filenames( \
+        out_dir, task_id=task_id, train_iter=train_iter)
     if train_iter is not None:
         if train_iter == -1:
             ckpt_mnet_fn = tckpt.get_best_ckpt_path(ckpt_mnet_fn)
             ckpt_hnet_fn = tckpt.get_best_ckpt_path(ckpt_hnet_fn)
             ckpt_dnet_fn = tckpt.get_best_ckpt_path(ckpt_dnet_fn)
+            ckpt_wembs_fn = tckpt.get_best_ckpt_path(ckpt_wembs_fn)
         else:
             raise NotImplementedError()
 
@@ -1152,6 +1281,10 @@ def load_models(out_dir, device, logger, mnet, hnet=None, dnet=None,
             device=device, ret_performance_score=True)
     if dnet is not None:
         ckpt_dict_dnet, _ = tckpt.load_checkpoint(ckpt_dnet_fn, dnet,
+            device=device, ret_performance_score=True)
+    if wembs is not None:
+        tmp_wembs = torch.nn.ModuleList(wembs)
+        ckpt_dict_wembs, _ = tckpt.load_checkpoint(ckpt_wembs_fn, tmp_wembs,
             device=device, ret_performance_score=True)
 
     if task_id is None and train_iter is None:
@@ -1166,6 +1299,8 @@ def load_models(out_dir, device, logger, mnet, hnet=None, dnet=None,
             assert train_iter == ckpt_dict_hnet['train_iter']
         if dnet is not None:
             assert train_iter == ckpt_dict_dnet['train_iter']
+        if wembs is not None:
+            assert train_iter == ckpt_dict_wembs['train_iter']
 
         if task_id is None:
             logger.info('Restored network(s) from training iteration %d ' \
@@ -1176,8 +1311,11 @@ def load_models(out_dir, device, logger, mnet, hnet=None, dnet=None,
                         'training iteration %d ' % train_iter +
                          'with a validation accuracy of %f%%.' % score)
 
-    # FIXME Why would we wanna return the models?
+    # FIXME Why would we wanna return the models? They have been modified
+    # in-place.
     if return_models:
+        warn('Option "return_models" is deprecated. Passed models are ' +
+             'modified in place.' , DeprecationWarning)
         return score, mnet, hnet, dnet
     else:
         return score
@@ -1347,24 +1485,32 @@ def adjust_targets_to_head(config, data, targets, task_id, dhandlers=None,
 
     return targets
 
-def preprocess_inputs(config, inputs, task_id):
+def preprocess_inputs(config, shared, inputs, task_id):
     """Preprocess a batch of inputs from the datahandler before inputting it
     into the classifier.
 
     Things that are done in this function:
 
+    - If word embeddings are used (attribute ``shared.word_emb_lookups``), then
+      inputs are first translated using the word embeddings corresponding to
+      ``task_id``.
     - If ``config.input_task_identity`` is set, then a 1-hot encoding is
       appended to the feature dimension, where the ``task_id``-th entry is set
       to ``1``.
 
     Args:
         config (argparse.Namespace): Command-line arguments.
+        shared (argparse.Namespace): Miscellaneous information shared across
+            functions.
         inputs (torch.Tensor): Batch of input samples.
         task_id (int): ID of the task from which that inputs stem.
 
     Returns:
         (torch.Tensor): Preprocessed ``inputs``.
     """
+    if hasattr(shared, 'word_emb_lookups'):
+        inputs = shared.word_emb_lookups[task_id].forward(inputs)
+
     if config.input_task_identity:
         assert len(inputs.shape) == 3
         # Add a one-hot-encoding of task identity.
@@ -1392,15 +1538,20 @@ def hnet_forward(config, hnet, task_id):
     else:
         return hnet.forward(task_id=task_id)
 
-def update_coresets(config, task_id, data):
+def update_coresets(config, shared, task_id, data):
     """Create a new coreset for task ``task_id``.
 
     This function extracts a random subset of the training set from the data
     handler ``data`` and stores it as a coreset. The coresets are stored in
-    the container ``config``.
+    the container ``shared``.
+
+    In addition, the sample IDs of the corresponding coreset inputs are stored
+    in ``shared.coreset_sample_ids``.
 
     Args:
         config (argparse.Namespace): Command-line arguments.
+        shared (argparse.Namespace): Miscellaneous information shared across
+            functions.
         task_id (int): The task ID associated to the corset samples
         data: Dataset loader. New data will be added to the coreset from the
             training set of this data loader.
@@ -1410,15 +1561,53 @@ def update_coresets(config, task_id, data):
         return
 
     if task_id > 0:
-        assert hasattr(config, 'coresets') and len(config.coresets) == task_id
+        assert hasattr(shared, 'coresets') and len(shared.coresets) == task_id
     else:
-        config.coresets = []
+        shared.coresets = []
+        shared.coreset_sample_ids = []
 
     # Pick random samples from the training set as new coreset.
-    batch = data.next_train_batch(config.coreset_size)
+    batch = data.next_train_batch(config.coreset_size, return_ids=True)
     # We don't transform them to tensors yet, as random data augmentation might
     # be applied in this step.
     #coreset = data.input_to_torch_tensor(batch[0], device, mode='train')
     coreset = batch[0]
 
-    config.coresets.append(coreset)
+    shared.coresets.append(coreset)
+    shared.coreset_sample_ids.append(batch[2])
+
+def get_target_net_weight_masks(target_net, weight_type='rec', device=None):
+    """Return a mask for the recurrent main network weights that selects
+    either recurrent or feedforward weights.
+
+    Depending on the type of weight requested (`rec` or `ff`),
+    this function returns a list of tensors akin to ``target_net.param_shapes``
+    with values equal to 1 for weights that are of the requested type (
+    recurrent or feedforward respectively), and 0 for the other weights.
+
+    Args:
+        target_net: The target recurrent network.
+        weight_type (optional, str): The type of weight of interest. Options
+            are `recurrent` or `forward`.
+        device (optional): PyTorch device of returned mask.
+
+    Return:
+        (list): The corresponding mask for each tensor in the main network.
+    """
+    weight_masks = []
+    for i, weights_shape in enumerate(target_net.param_shapes):
+
+        weight_is_recurrent = 'info' in target_net.param_shapes_meta[i].keys() \
+                        and target_net.param_shapes_meta[i]['info'] == 'hh'
+
+        # Masks are zeros unless the current weights are of the requested type.
+        mask = torch.zeros(weights_shape)
+        if weight_type == 'rec' and weight_is_recurrent:
+            mask = torch.ones(weights_shape)
+        elif weight_type == 'ff' and not weight_is_recurrent:
+            mask = torch.ones(weights_shape)
+        if device is not None:
+            mask = mask.to(device)
+        weight_masks.append(mask)
+
+    return weight_masks

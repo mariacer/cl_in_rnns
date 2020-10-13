@@ -47,7 +47,7 @@ from utils.module_wrappers import CLHyperNetInterface
 
 class ChunkedHyperNetworkHandler(nn.Module, CLHyperNetInterface):
     """This class handles an instance of the class
-    :class:`hnets.hyper_model.HyperNetwork` to produce the weights of a
+    :class:`toy_example.hyper_model.HyperNetwork` to produce the weights of a
     main network. I.e., it generates one instance of a full hypernetwork (that
     will produce only one chunk rather than all main net weights) and handles
     all the embedding vectors. Additionally, it provides an easy interface to

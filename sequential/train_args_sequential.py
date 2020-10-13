@@ -41,6 +41,8 @@ def miscellaneous_args(agroup, dclassification=False, dbeta_fixation=0.5,
         - `classification`
         - `store_activations`
         - `multitask`
+        - `train_only_heads_after_first`
+        - `dont_train_heads`
         - `train_tnet_once`
         - `use_ce_loss`
         - `beta_fixation`
@@ -80,6 +82,12 @@ def miscellaneous_args(agroup, dclassification=False, dbeta_fixation=0.5,
                         help='Train the network in a multitask fashion, i.e. ' +
                              'with data from all tasks presented ' +
                              'simultaneously.')
+    agroup.add_argument('--train_only_heads_after_first', action='store_true',
+                        help='If True, only the final fully-connected layer ' +
+                             'will be trained for all tasks after the first ' +
+                             'one.')
+    agroup.add_argument('--dont_train_heads', action='store_true',
+                        help='If True, the output heads will not be trained.')
     agroup.add_argument('--train_tnet_once', action='store_true',
                         help='Train the target network only when training ' +
                              'the first task and keep the weights fixed ' +
@@ -235,7 +243,8 @@ def miscellaneous_args(agroup, dclassification=False, dbeta_fixation=0.5,
                              'deactivate the criterion for a task. ' +
                              'Default: %(default)s')
 
-def rnn_args(parser, drnn_arch='256', dnet_act='tanh'):
+def rnn_args(parser, drnn_arch='256', dnet_act='tanh',
+             show_use_bidirectional_net=False):
     """This is a helper function of function :func:`parse_cmd_arguments` to add
     an argument group for options to a main network.
 
@@ -250,6 +259,8 @@ def rnn_args(parser, drnn_arch='256', dnet_act='tanh'):
         parser: Object of class :class:`argparse.ArgumentParser`.
         drnn_arch: Default value of option `rnn_arch`.
         dnet_act: Default value of option `net_act`.
+        show_use_bidirectional_net (bool): Whether option
+            `show_use_bidirectional_net` should be shown.
 
     Returns:
         The created argument group, in case more options should be added.
@@ -286,6 +297,10 @@ def rnn_args(parser, drnn_arch='256', dnet_act='tanh'):
     agroup.add_argument('--use_vanilla_rnn', action='store_true',
                         help='Whether vanilla rnn cells should be used. ' +
                              'Otherwise, LSTM cells are used.')
+    if show_use_bidirectional_net:
+        agroup.add_argument('--use_bidirectional_net', action='store_true',
+                            help='If set, a bidirectional LSTM or RNN (if ' +
+                                 '"use_vanilla_rnn" is used) will be used.')
 
     return agroup
 
@@ -309,6 +324,15 @@ def new_hnet_args(agroup):
                         help='Is a "structured_hmlp" hypernetwork is used, ' +
                              'then this option decides whether fully-' +
                              'connected layers should be chunked as well.')
+    agroup.add_argument('--nh_separate_out_head', action='store_true',
+                        help='By default, if "--hnet_all" is used, all main ' +
+                             'network weights (incl. output head weights) ' +
+                             'originate from a conditional hypernetwork. If ' +
+                             'this option is activated, then the output head ' +
+                             'weights will be task-specific and do not ' +
+                             'originate from a shared hypernetwork. Note, if ' +
+                             'activated, the main network output will always ' +
+                             'correspond to a multihead setting.')
     agroup.add_argument('--use_new_hnet', action='store_true',
                         help='Whether one of the new hypernet ' +
                              'implementations should be used.')
@@ -725,6 +749,23 @@ def check_invalid_args_sequential(config):
         if config.hyper_fan_init:
             warnings.warn('Option "hyper_fan_init" has no effect if no ' +
                           'hypernetwork is used.')
+        if config.nh_separate_out_head:
+            # Note, option doesn't make sense for context-mod hnet.
+            raise ValueError('Option "nh_separate_out_head" only applicable ' +
+                             'when using "--hnet_all".')
+
+    if config.nh_separate_out_head:
+        if config.multi_head:
+            # FIXME Was easier to implement this way.
+            warnings.warn('Option "multi_head" shouldn\'t be used in ' +
+                          'conjunction with option "nh_separate_out_head". ' +
+                          'Otherwise (due to implementation reasons) a task-' +
+                          'specific multi-head is generated rather then a ' +
+                          'task-specific single-head, therefore leading too ' +
+                          'a lot of unused weights.')
+        if hasattr(config, 'use_replay') and config.use_replay:
+            raise ValueError('Option "nh_separate_out_head" not applicable ' +
+                             'to replay decoder.')
 
     # Note, the following warnings should simply save us from doing stupid
     # comparisons of single head EWC/SI networks with hnet-protected single-
@@ -816,7 +857,29 @@ def check_invalid_args_sequential(config):
             config.early_stopping_thld > 0:
         raise ValueError('Options "use_best_models" and ' +
                          '"early_stopping_thld" are mutually exclusive.')
+    if config.train_only_heads_after_first:
+        if config.hnet_all or config.train_tnet_once:
+            raise ValueError('Option to only train the output '+
+                'weights of the RNN is not implemented in this case.')
+        if config.use_ewc or config.use_si:
+            raise ValueError('It doesnt make sense to use EWC/SI if all '
+                             'shared weights are fixed.')
 
+    if config.dont_train_heads:
+        if config.train_only_heads_after_first:
+            raise ValueError('The current implementation of options ' +
+                '"dont_train_heads" and "train_only_heads_after_first" is ' +
+                'not compatible currently.')
+        # FIXME I don't think that's true and that we can delete the error.
+        if config.use_context_mod:
+            raise NotImplementedError('The option "dont_train_heads" cannot ' +
+                'currently be used with context-mod.')
+
+    if hasattr(config, 'use_bidirectional_net') and \
+            config.use_bidirectional_net:
+        # Not yet supported by BiLSTM, but should be an easy fix.
+        if config.use_ewc and config.tbptt_fisher != -1:
+            raise NotImplementedError()
 
 
 def update_cli_args(config):
@@ -857,6 +920,8 @@ def update_cli_args(config):
         config.srnn_pre_fc_layers = ''
     # FIXME cheap way of figuring out whether this is a copy task config.
     is_copy_config = hasattr(config, 'first_task_input_len')
+    if is_copy_config and not hasattr(config, 'seq_out_width'):
+        config.seq_out_width = -1
     if is_copy_config and not hasattr(config, 'use_new_permuted_dhandler'):
         config.use_new_permuted_dhandler = False
     if is_copy_config and not hasattr(config, 'scatter_pattern'):
@@ -876,6 +941,14 @@ def update_cli_args(config):
         config.permute_xor_separate = False
     if is_copy_config and not hasattr(config, 'random_pad'):
         config.random_pad = False
+    if is_copy_config and not hasattr(config, 'pad_after_stop'):
+        config.pad_after_stop = False
+    if is_copy_config and not hasattr(config, 'pairwise_permute'):
+        config.pairwise_permute = False
+    if is_copy_config and not hasattr(config, 'revert_output_seq'):
+        config.revert_output_seq = False
+    if is_copy_config and not hasattr(config, 'dont_train_heads'):
+        config.dont_train_heads = False
 
     return config
 

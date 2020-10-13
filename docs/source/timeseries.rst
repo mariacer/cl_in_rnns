@@ -13,12 +13,25 @@ Common Datasets
     :undoc-members:
     :show-inheritance:
 
+.. automodule:: data.timeseries.mud_data
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 .. automodule:: data.timeseries.audioset_data
     :members:
     :undoc-members:
     :show-inheritance:
 
 .. automodule:: data.timeseries.smnist_data
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+Custom Datasets
+===============
+
+.. automodule:: data.timeseries.rnd_rec_teacher
     :members:
     :undoc-members:
     :show-inheritance:

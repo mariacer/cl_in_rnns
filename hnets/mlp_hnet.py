@@ -238,7 +238,7 @@ class HMLP(nn.Module, HyperNetInterface):
         Args:
             (....): See docstring of method
                 :meth:`hnets.hnet_interface.HyperNetInterface.forward`.
-            condition (int):This argument will be passed as argument
+            condition (int, optional): This argument will be passed as argument
                 ``stats_id`` to the method
                 :meth:`utils.batchnorm_layer.BatchNormLayer.forward` if batch
                 normalization is used.

@@ -20,8 +20,8 @@
 # @version         :1.0
 # @python_version  :3.6.8
 """
-Study dimensionality of hidden states in Sequential SMNIST.
------------------------------------------------------------
+Study dimensionality of hidden states in Sequential SMNIST
+----------------------------------------------------------
 
 In this script, we perform an analysis of the dimensionality of the hidden 
 states of a recurrent network, for different continual learning experiments.
@@ -41,7 +41,6 @@ For running these analyses, one needs to have run before the following:
 Making sure that the different runs have different complexities, and that they
 all have the following arguments activated for all runs: 
 `--store_final_models --store_during_models`.
-
 """
 # Do not delete the following import for all executable scripts!
 import __init__ # pylint: disable=unused-import
@@ -76,4 +75,4 @@ if __name__=='__main__':
                     'fixed_params': ['num_tasks']}
 
     run(config, analysis_kwd, task_loss_func, accuracy_func, \
-        generate_tasks_func, copy_task=False)
+        generate_tasks_func, dataset='seq_smnist')

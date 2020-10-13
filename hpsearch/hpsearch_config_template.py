@@ -224,9 +224,10 @@ _PERFORMANCE_SORT_ASC = False
 # script. The function handle should expect the list of command line options
 # as only parameter.
 # Example:
-# from sequential.smnist import train_args_smnist as targs
-# f = lambda argv : targs.parse_cmd_arguments(argv=argv)
-# _ARGPARSE_HANDLE = f
+# >>> from classifier.imagenet import train_args as targs
+# >>> f = lambda argv : targs.parse_cmd_arguments(mode='cl_ilsvrc_cub',
+# ...                                             argv=argv)
+# >>> _ARGPARSE_HANDLE = f
 _ARGPARSE_HANDLE = None
 
 if __name__ == '__main__':

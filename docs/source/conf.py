@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'Hypernet Algorithms'
+project = 'CL in RNNs'
 copyright = '2020, Christian Henning, Maria R. Cervera, Benjamin Ehret, Johannes von Oswald'
 author = 'Christian Henning, Maria R. Cervera, Benjamin Ehret, Johannes von Oswald'
 

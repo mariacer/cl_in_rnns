@@ -35,62 +35,19 @@ class PermutedCopyList():
     """A list of permuted Copy tasks that only uses a single instance of class
     :class:`PermutedCopy`.
 
-    An instance of this class emulates a Python list that holds objects of
-    class :class:`PermutedCopy`. However, it doesn't actually hold several
-    objects, but only one with just the permutation matrix being exchanged
-    everytime a different element of this list is retrieved. Therefore, **use
-    this class with care**!
-
-        - As all list entries are the same PermutedCopy object, one should
-          never work with several list entries at the same time!
-          -> **Retrieving a new list entry will modify every previously
-          retrieved list entry!**
-        - When retrieving a slice, a shallow copy of this object is created
-          (i.e., the underlying :class:`PermutedCopy` does not change) with
-          only the desired subgroup of permutations avaliable.
-
-    Why would one use this object? When working with many permuted Copy Tasks,
-    then the memory consumption becomes significant if one desires to hold all
-    task instances at once in working memory. An object of this class only needs
-    to hold the Copy dataset once in memory. Just the number of permutation
-    matrices grows linearly with the number of tasks.
+    This class is inspired by 
+    :class:`data.special.permuted_mnist.PermutedMNISTList`. For explanations
+    and instructions on how to use, please refer to its documentation.
+    Always keep in mind that this class emulates a Python list that holds
+    objects of class :class:`PermutedCopy`. However, it doesn't actually hold
+    several objects, but only one with just the permutation matrix being
+    exchanged everytime a different element of this list is retrieved.
+    Therefore, **use this class with care**!
 
     Caution:
         **You may never use more than one entry of this class at the same
         time**, as all entries share the same underlying data object and
         therewith the same permutation.
-
-    Note:
-        The mini-batch generation process is maintained separately for every
-        permutation. Thus, the retrieval of mini-batches for different
-        permutations does not influence one another.
-
-    Example:
-        You should **never** use this list as follows
-
-        .. code-block:: python
-
-            dhandlers = PermutedCopyList(permutations, '/tmp')
-            d0 = dhandlers[0]
-            # Zero-th permutation is active ...
-            # ...
-            d1 = dhandlers[1]
-            # First permutation is active for `d0` and `d1`!
-            # Important, you may not use `d0` anymore, as this might lead to
-            # undesired behavior.
-
-    Example:
-        Instead, always work with only one list entry at a time. The following
-        usage would be **correct**
-
-        .. code-block:: python
-
-            dhandlers = PermutedCopyList(permutations, '/tmp')
-            d = dhandlers[0]
-            # Zero-th permutation is active ...
-            # ...
-            d = dhandlers[1]
-            # First permutation is active for `d` as expected.
 
     Args:
         (....): See docstring of constructor of class :class:`PermutedMNIST`.

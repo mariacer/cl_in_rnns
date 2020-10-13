@@ -826,8 +826,8 @@ class MainNetInterface(ABC):
                 self._internal_params.extend(cmod_layer.weights)
 
     def _num_context_mod_shapes(self):
-        """The number of entries in :attr:`param_shapes` associated with contex-
-        modulation.
+        """The number of entries in :attr:`param_shapes` associated with
+        context-modulation.
 
         Returns:
             (int): Returns ``0`` if :attr:`context_mod_layers` is ``None``.

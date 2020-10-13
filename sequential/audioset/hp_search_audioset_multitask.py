@@ -22,7 +22,7 @@
 
 Configuration file for the multitask hyperparameter search of the Audioset task.
 """
-from sequential.copy import hp_search_copy as hpcog
+from sequential.copy import hp_search_copy as hpcopy
 from sequential.copy import hp_search_copy_multitask as hpcopy_mt
 
 ##########################################
@@ -79,6 +79,7 @@ grid = {
     #'nh_hnet_specnorm': [False],
     #'nh_shmlp_chunk_sizes': ['8'],
     #'nh_shmlp_chunk_fc_layers': [False],
+    #'nh_separate_out_head': [False],
     'use_new_hnet': [False],
 
     ### Initialization Options ###
@@ -131,7 +132,7 @@ conditions = [
 ####################################
 ### DO NOT CHANGE THE CODE BELOW ###
 ####################################
-conditions = conditions + hpcog._BASE_CONDITIONS
+conditions = conditions + hpcopy._BASE_CONDITIONS
 
 ### This code only has to be adapted if you are setting up this template for a
 ### new simulation script!
@@ -177,9 +178,10 @@ _PERFORMANCE_SORT_ASC = False
 # script. The function handle should expect the list of command line options
 # as only parameter.
 # Example:
-# from sequential.smnist import train_args_smnist as targs
-# f = lambda argv : targs.parse_cmd_arguments(argv=argv)
-# _ARGPARSE_HANDLE = f
+# >>> from classifier.imagenet import train_args as targs
+# >>> f = lambda argv : targs.parse_cmd_arguments(mode='cl_ilsvrc_cub',
+# ...                                             argv=argv)
+# >>> _ARGPARSE_HANDLE = f
 from sequential.audioset import train_args_audioset as targs
 f = lambda argv : targs.parse_cmd_arguments(argv=argv)
 _ARGPARSE_HANDLE = f

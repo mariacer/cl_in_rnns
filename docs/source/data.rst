@@ -19,7 +19,6 @@ API
     :undoc-members:
     :show-inheritance:
 
-
 Sequential datasets
 ===================
 

@@ -251,7 +251,7 @@ def calc_fix_target_reg(hnet, task_id, targets=None, dTheta=None, dTembs=None,
             ``inds_of_out_heads`` are specified.
         inds_of_out_heads: (list, optional): List of lists of integers, denoting
             which output neurons of the main network are used for predictions of
-            the corresponding previous task.
+            the corresponding previous tasks.
             This will ensure that only weights of output neurons involved in
             solving a task are regularized.
 
@@ -402,7 +402,12 @@ def calc_fix_target_reg(hnet, task_id, targets=None, dTheta=None, dTembs=None,
 
         if fisher_estimates is not None:
             _assert_shape_equality(weights_predicted, fisher_estimates[i])
-            FI = torch.cat([w.view(-1) for w in fisher_estimates[i]])
+
+            if inds_of_out_heads is not None:
+                FI = flatten_and_remove_out_heads(mnet, fisher_estimates[i],
+                                                        inds_of_out_heads[i])
+            else:
+                FI = torch.cat([w.view(-1) for w in fisher_estimates[i]])
 
             reg_i = (FI * (W_target - W_predicted).pow(2)).sum()
         else:

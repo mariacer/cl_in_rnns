@@ -26,6 +26,7 @@ learning setting based on the sequential SMNIST Task.
 # Do not delete the following import for all executable scripts!
 import __init__ # pylint: disable=unused-import
 
+from argparse import Namespace
 import matplotlib.pyplot as plt
 import os
 
@@ -36,7 +37,7 @@ import sequential.seq_smnist.train_utils_seq_smnist as ctu
 import utils.sim_utils as sutils
 
 import sequential.seq_smnist.hpconfig_seq_smnist as hpsearch_cl
-#import sequential.seq_smnist.hpconfig_seq_smnist_multitask as hpsearch_mt
+import sequential.seq_smnist.hpconfig_seq_smnist_multitask as hpsearch_mt
 
 def run():
     """ Run the script"""
@@ -44,12 +45,14 @@ def run():
     ### Setup ###
     #############
 
-    # Get command line arguments.
     config = train_args_seq_smnist.parse_cmd_arguments()
-    # setup env
     device, writer, logger = sutils.setup_environment(config)
-    # get data handlers
     dhandlers = ctu._generate_tasks(config, logger)
+
+    # We will use the namespace below to share miscellaneous information between
+    # functions.
+    shared = Namespace()
+    shared.feature_size = dhandlers[0].in_shape[0]
 
     # Plot images.
     if config.show_plots:
@@ -63,7 +66,8 @@ def run():
                 show=True, filename=os.path.join(figure_dir,
                     'test_samples_task_%d.png' % t))
 
-    target_net, hnet, dnet = stu.generate_networks(config, dhandlers, device)
+    target_net, hnet, dnet = stu.generate_networks(config, shared, dhandlers,
+                                                   device)
 
     # generate masks if needed
     ctx_masks = None
@@ -73,11 +77,11 @@ def run():
     # We store the target network weights (excluding potential context-mod
     # weights after every task). In this way, we can quantify changes and
     # observe the "stiffness" of EWC.
-    config.tnet_weights = []
+    shared.tnet_weights = []
     # We store the context-mod weights (or all weights) coming from the hypernet
     # after every task, in order to quantify "forgetting". Note, the hnet
     # regularizer should keep them fix.
-    config.hnet_out = []
+    shared.hnet_out = []
 
     # Get the task-specific functions for loss and accuracy.
     task_loss_func = ctu.get_loss_func(config, device, logger, ewc_loss=False)
@@ -85,10 +89,16 @@ def run():
     ewc_loss_func = ctu.get_loss_func(config, device, logger, ewc_loss=True) \
         if config.use_ewc else None
 
+    replay_fcts = None
+    if config.use_replay:
+        replay_fcts = dict()
+        replay_fcts['rec_loss'] = ctu.get_vae_rec_loss_func()
+        replay_fcts['distill_loss'] = ctu.get_distill_loss_func()
+        replay_fcts['soft_trgt_acc'] = ctu.get_soft_trgt_acc_func()
+
     if config.multitask:
-        raise NotImplementedError()
-        #summary_keywords=hpsearch_mt._SUMMARY_KEYWORDS
-        #summary_filename=hpsearch_mt._SUMMARY_FILENAME
+        summary_keywords=hpsearch_mt._SUMMARY_KEYWORDS
+        summary_filename=hpsearch_mt._SUMMARY_FILENAME
     else:
         summary_keywords=hpsearch_cl._SUMMARY_KEYWORDS
         summary_filename=hpsearch_cl._SUMMARY_FILENAME
@@ -100,9 +110,10 @@ def run():
     # Train the network task by task. Testing on all tasks is run after 
     # finishing training on each task.
     ret, train_loss, test_loss, test_acc = sts.train_tasks(dhandlers,
-        target_net, hnet, dnet, device, config, logger, writer, ctx_masks,
-        summary_keywords, summary_filename, task_loss_func=task_loss_func,
-        accuracy_func=accuracy_func, ewc_loss_func=ewc_loss_func)
+        target_net, hnet, dnet, device, config, shared, logger, writer,
+        ctx_masks, summary_keywords, summary_filename,
+        task_loss_func=task_loss_func, accuracy_func=accuracy_func,
+        ewc_loss_func=ewc_loss_func, replay_fcts=replay_fcts)
 
     stu.log_results(test_acc, config, logger)
 

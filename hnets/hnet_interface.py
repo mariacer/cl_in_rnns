@@ -753,9 +753,9 @@ hyper_shapes_learned` (if specified) or the length of attribute
             ``distilled_params`` and ``condition``.
 
         Args:
-            _input_required (bool): Whether at least one of the forward argumets
-                ``uncond_input``, ``cond_input`` and ``cond_id`` has to be not
-                ``None``.
+            _input_required (bool): Whether at least one of the forward
+                arguments ``uncond_input``, ``cond_input`` and ``cond_id`` has
+                to be not ``None``.
             _parse_cond_id_fct (func): A function with signature
                 ``_parse_cond_id_fct(self, cond_ids, cond_weights)``, where
                 ``self`` is the current object, ``cond_ids`` is a ``list`` of
@@ -846,8 +846,16 @@ hyper_shapes_learned` (if specified) or the length of attribute
                 up_ref = self.unconditional_param_shapes_ref
                 cp_ref = self.conditional_param_shapes_ref
 
-                uncond_weights = [None] * len(up_ref)
-                cond_weights = [None] * len(cp_ref)
+                if up_ref is not None:
+                    uncond_weights = [None] * len(up_ref)
+                else:
+                    up_ref = []
+                    uncond_weights = None
+                if cp_ref is not None:
+                    cond_weights = [None] * len(cp_ref)
+                else:
+                    cp_ref = []
+                    cond_weights = None
 
                 for i in range(len(self.param_shapes)):
                     if i in up_ref:

@@ -40,13 +40,16 @@ import torch.nn.functional as F
 
 from data.timeseries.audioset_data import AudiosetData
 from data.timeseries.copy_data import CopyTask
+from data.timeseries.mud_data import MUDData
 from data.timeseries.smnist_data import SMNISTData
+from data.timeseries.seq_smnist import SeqSMNIST
+from mnets.bi_rnn import BiRNN
 from sequential import train_utils_sequential as stu
 
-def replay_samples(config, device, all_dhandlers, task_ids, batch_size, dnet,
-                   hnet=None, dnet_weights=None, hnet_weights=None,
+def replay_samples(config, shared, device, all_dhandlers, task_ids, batch_size,
+                   dnet, hnet=None, dnet_weights=None, hnet_weights=None,
                    hnet_tembs=None, split_by_id=False,
-                   replay_all_data=False, coresets=None):
+                   replay_all_data=False, coresets=None, ret_seq_lens=False):
     """Replay samples using the decoder network.
 
     This function will create a batch of replayed samples. If the decoder can be
@@ -55,6 +58,8 @@ def replay_samples(config, device, all_dhandlers, task_ids, batch_size, dnet,
 
     Args:
         config (argparse.Namespace): Command-line arguments.
+        shared (argparse.Namespace): Miscellaneous information shared across
+            functions.
         device: PyTorch device.
         all_dhandlers (list): A list of data handlers for all tasks. Required
             to obtain meta information, like the maximum number of timesteps per
@@ -80,6 +85,8 @@ def replay_samples(config, device, all_dhandlers, task_ids, batch_size, dnet,
                 and should only be used as a sanity check!
         coresets (list, optional): A list of coreset samples per previous task.
             If provided, the decoder ``dnet`` is ignored.
+        ret_seq_lens (bool): If ``True``, and additional return value
+            ``in_seq_lens`` will be returned.
 
     Returns:
         (tuple): Tuple containing:
@@ -101,8 +108,14 @@ def replay_samples(config, device, all_dhandlers, task_ids, batch_size, dnet,
           samples in ``inputs`` are distributed if returned as a list. Note, the
           random permutation is done to ensure that each task appears on average
           equally often in the returned batches.
+        - **in_seq_lens** (list, optional): Only returned if ``ret_seq_lens``
+          is set. The return value will usually be ``None`` except if real data
+          is replayed (see options ``replay_all_data`` and ``coresets``). In
+          this case, the actual sequence lengths of the replayed inputs are
+          returned.
     """
     task_labels = None
+    in_seq_lens = None
 
     assert isinstance(task_ids, (list, tuple))
 
@@ -137,22 +150,34 @@ def replay_samples(config, device, all_dhandlers, task_ids, batch_size, dnet,
         # FIXME We make our life simple and ignore `single_batch`.
         assert split_by_id
         inputs = []
+        in_seq_lens = []
 
         for i, t in enumerate(task_ids):
             bs = num_per_id[i]
             if replay_all_data:
-                batch = all_dhandlers[t].next_train_batch(bs)
+                batch = all_dhandlers[t].next_train_batch(bs, return_ids=True)
                 samples = batch[0]
+                sample_lengths = all_dhandlers[t].get_out_seq_lengths(batch[2])
             else:
-                coreset = config.coresets[t]
+                coreset = shared.coresets[t]
                 batch_inds = np.random.randint(0, coreset.shape[0], bs)
                 samples = coreset[batch_inds, :]
+                sample_lengths = all_dhandlers[t].get_out_seq_lengths( \
+                    shared.coreset_sample_ids[t][batch_inds])
             # Note, I use `train` mode as the actual replay decoder is also
             # trained with training samples.
             X_t = all_dhandlers[t].input_to_torch_tensor(samples, device,
                                                          mode='train')
-            X_t = stu.preprocess_inputs(config, X_t, t)
+            X_t = stu.preprocess_inputs(config, shared, X_t, t)
+
+            # This might seem a bit hacky, but can reduce runtime a lot. Since
+            # we enforce `split_by_id`, we just assume that noone wants to
+            # concatenate the separate `X_t` again afterwards.
+            max_sl = int(sample_lengths.max())
+            X_t = X_t[:max_sl, :, :]
+
             inputs.append(X_t)
+            in_seq_lens.append(sample_lengths)
 
     else:
         ###########################
@@ -241,12 +266,15 @@ def replay_samples(config, device, all_dhandlers, task_ids, batch_size, dnet,
             else:
                 inputs = torch.sigmoid(inputs)
         else:
-            assert isinstance(all_dhandlers[0], (AudiosetData, SMNISTData))
+            assert isinstance(all_dhandlers[0],
+                              (AudiosetData, MUDData, SMNISTData, SeqSMNIST))
 
+    if ret_seq_lens:
+        return inputs, task_labels, task_ids, in_seq_lens
     return inputs, task_labels, task_ids
 
 def get_soft_targets(config, all_dhandlers, inputs, task_labels, cnet,
-                     cnet_weights, trained_task_id=None):
+                     cnet_weights, trained_task_id=None, input_lens=None):
     """Compute soft targets wit classifier ``cnet``.
 
     Soft targets can be used for
@@ -273,16 +301,24 @@ def get_soft_targets(config, all_dhandlers, inputs, task_labels, cnet,
             network.
         trained_task_id: See argument ``trained_task_id`` of function
             :func:`sequential.train_utils_sequential.out_units_of_task`
+        input_lens (numpy.ndarray, optional): Only utilized if network ``cnet``
+            is of :class:`mnets.bi_rnn.BiRNN`, where sequence lengths are
+            expected to be passed.
 
     Returns:
-        (torch.Tensor): The `soft` **logit** targets correspoding to ``inputs``.
+        (torch.Tensor): The `soft` **logit** targets corresponding to
+        ``inputs``.
 
         Note:
             The returned targets are detached from the computational graph.
     """
     task_ids = np.unique(task_labels).astype(np.int).tolist()
 
-    Y_logits = cnet.forward(inputs, weights=cnet_weights)
+    if isinstance(cnet, BiRNN) and input_lens is not None:
+        Y_logits = cnet.forward(inputs, weights=cnet_weights,
+                                seq_lengths=input_lens)
+    else:
+        Y_logits = cnet.forward(inputs, weights=cnet_weights)
 
     # In a multihead setting, we have to select the correct output head from
     # Y_logits.

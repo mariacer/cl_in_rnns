@@ -47,8 +47,7 @@ def parse_cmd_arguments(default=False, argv=None):
 
     cli.cl_args(parser, show_beta=True, dbeta=0.005,
                 show_from_scratch=True, show_multi_head=True,
-                show_split_head_cl3=False,
-                show_cl_scenario=False,
+                show_split_head_cl3=False, show_cl_scenario=False,
                 show_num_tasks=True, dnum_tasks=6)
     cli.train_args(parser, show_lr=True, show_epochs=False,
         dbatch_size=64, dn_iter=5000,
@@ -76,7 +75,7 @@ def parse_cmd_arguments(default=False, argv=None):
     seq.ewc_args(parser, dewc_lambda=5000., dn_fisher=-1, dtbptt_fisher=-1,
         show_ts_weighting_fisher=False)
     seq.si_args(parser, dsi_lambda=1.)
-    seq.context_mod_args(parser, dsparsification_reg_type='l1', 
+    seq.context_mod_args(parser, dsparsification_reg_type='l1',
         dsparsification_reg_strength=1., dcontext_mod_init='constant')
     seq.miscellaneous_args(magroup, dmask_fraction=0.8, dclassification=True,
                            show_ts_weighting=False, show_use_ce_loss=False,
@@ -126,12 +125,17 @@ def copy_sequence_args(parser):
         - `input_len_step`
         - `input_len_variability`
         - `seq_width`
+        - `seq_out_width`
         - `pat_len`
+        - `random_pad`
         - `permute_width`
         - `permute_time`
         - `use_new_permuted_dhandler`
         - `permute_xor`
         - `permute_xor_iter`
+        - `pad_after_stop`
+        - `pairwise_permute`
+        - `revert_output_seq`
 
     Args:
         parser: Object of class :class:`argparse.ArgumentParser`.
@@ -157,6 +161,10 @@ def copy_sequence_args(parser):
     sgroup.add_argument('--seq_width', type=int, default=7,
                         help='The width of the sequences (excluding the stop ' +
                              'flag). Default: %(default)s')
+    sgroup.add_argument('--seq_out_width', type=int, default=-1,
+                        help='If specified, the number of output features ' +
+                             'will differ from "seq_width" ("seq_out_width < ' +
+                             'seq_width"). Default: %(default)s')
     sgroup.add_argument('--pat_len', type=int, default=-1,
                         help='The number of timesteps in the training copy ' +
                              'patterns that shouldnt be zeroed out. Note that '+
@@ -225,9 +233,20 @@ def copy_sequence_args(parser):
                              'than 1, then rather than applying the same ' +
                              'permutation iteratively, a different ' +
                              'permutation is applied at every iteration.')
+    sgroup.add_argument('--pad_after_stop', action='store_true',
+                        help='If active, then zero padding will occur after ' +
+                             'the stop bit and not before ("pat_len" has to ' +
+                             'be specified). Therefore, the padding will ' +
+                             'enter the loss computation directly.')
+    sgroup.add_argument('--pairwise_permute', action='store_true',
+                        help='If active, the permutations will correspond to '+
+                             'a pairwise switch between successive pixels.')
+    sgroup.add_argument('--revert_output_seq', action='store_true',
+                        help='If active, the output sequence will be reverted '+
+                             'along the time dimension.')
 
 def check_invalid_args_sequential(config):
-    """Sanity check for some command-line arguments specific to training on 
+    """Sanity check for some command-line arguments specific to training on
     the copy task.
 
     Args:
@@ -271,7 +290,28 @@ def check_invalid_args_sequential(config):
     if config.random_pad and config.pat_len==-1.:
         warnings.warn('The option "random_pad" has no effect if "pat_len" '+
             'is equal to -1.')
-
+    if config.pad_after_stop and config.pat_len==-1.:
+        warnings.warn('The option "pad_after_stop" is not compatible with ' +
+                      '"pat_len" equal to -1.')
+    if config.pairwise_permute:
+        if not (config.permute_time or config.permute_xor or \
+            config.permute_width):
+            raise ValueError('Option "pairwise_permute" only applicable if ' +
+                             'permutations are used.')
+        if config.num_tasks > 1:
+            warnings.warn('The option "pairwise_permute" leads to ' + 
+                'permutations that are identical for different tasks.')
+    if config.revert_output_seq:
+        if config.num_tasks > 1:
+            warnings.warn('The option "revert_output_seq" leads to ' + 
+                'permutations that are identical for different tasks.')
+        if config.permute_time or config.permute_width:
+            raise ValueError('Option "revert_output_seq" is not compatible ' +
+                             'with permutations.')
+        if config.input_len_variability != 0:
+            raise NotImplementedError('The current implementation only ' +
+                'supports reverting outputs when all sequences have the ' +
+                'same length.')
 
 
 if __name__=='__main__':

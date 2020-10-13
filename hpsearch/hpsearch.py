@@ -84,7 +84,7 @@ except ModuleNotFoundError:
 from utils import misc
 
 # From which module to read the default grid.
-_DEFAULT_GRID = 'sequential.copy.hp_search_copy'
+_DEFAULT_GRID = 'classifier.imagenet.hpsearch_config_ilsvrc_cub'
 
 ### The following variables will be otherwritten in the main ###
 ################################################################
@@ -403,7 +403,13 @@ def _check_running(args, out_dir, results_file, jobs):
             pass # Pipes are cleared again, no more lines in there
 
     if args.run_cluster and args.scheduler == 'lsf':
-        rjobs = bsub.running_jobs()
+        try:
+            rjobs = bsub.running_jobs()
+        except:
+            traceback.print_exc(file=sys.stdout)
+            warnings.warn('Could not assess whether jobs are still in the ' +
+                          'job queue. Assuming all jobs are still running.')
+            rjobs = None
     elif args.run_cluster:
         assert args.scheduler == 'slurm'
         rjobs = _slurm_check_running([t[0] for t in jobs])
@@ -416,7 +422,7 @@ def _check_running(args, out_dir, results_file, jobs):
         cmd_out_dir = cmd_dict[_OUT_ARG]
 
         if args.run_cluster and args.scheduler == 'lsf':
-            if job.job_id in rjobs:
+            if rjobs is None or job.job_id in rjobs:
                 jobs.append((job, cmd_dict, folder_name, ind, gpu_id, job_io))
                 continue
         elif args.run_cluster:

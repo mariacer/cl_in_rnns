@@ -27,6 +27,7 @@ learning setting based on the Copy Task.
 # Do not delete the following import for all executable scripts!
 import __init__ # pylint: disable=unused-import
 
+from argparse import Namespace
 import matplotlib.pyplot as plt
 
 import sequential.copy.train_utils_copy as ctu
@@ -45,13 +46,15 @@ def run():
     ### Setup ###
     #############
 
-    # Get command line arguments.
     config = train_args_copy.parse_cmd_arguments()
-    # setup env
     device, writer, logger = sutils.setup_environment(config)
-    # get data handlers
     dhandlers = ctu.generate_copy_tasks(config, logger, writer=writer)
     plc.visualise_data(dhandlers, config, device)
+
+    # We will use the namespace below to share miscellaneous information between
+    # functions.
+    shared = Namespace()
+    shared.feature_size = dhandlers[0].in_shape[0]
 
     if (config.permute_time or config.permute_width) and not \
             config.scatter_pattern and not config.permute_xor_separate and \
@@ -64,7 +67,8 @@ def run():
     if config.last_task_only:
         config.num_tasks = 1
 
-    target_net, hnet, dnet = stu.generate_networks(config, dhandlers, device)
+    target_net, hnet, dnet = stu.generate_networks(config, shared, dhandlers,
+                                                   device)
 
     # generate masks if needed
     ctx_masks = None
@@ -74,11 +78,11 @@ def run():
     # We store the target network weights (excluding potential context-mod
     # weights after every task). In this way, we can quantify changes and
     # observe the "stiffness" of EWC.
-    config.tnet_weights = []
+    shared.tnet_weights = []
     # We store the context-mod weights (or all weights) coming from the hypernet
     # after every task, in order to quantify "forgetting". Note, the hnet
     # regularizer should keep them fix.
-    config.hnet_out = []
+    shared.hnet_out = []
 
     # Get the task-specific functions for loss and accuracy.
     task_loss_func = ctu.get_copy_loss_func(config, device, logger,
@@ -108,10 +112,10 @@ def run():
     # Train the network task by task. Testing on all tasks is run after 
     # finishing training on each task.
     ret, train_loss, test_loss, test_acc = sts.train_tasks(dhandlers,
-        target_net, hnet, dnet, device, config, logger, writer, ctx_masks,
-        summary_keywords, summary_filename, task_loss_func=task_loss_func,
-        accuracy_func=accuracy_func, ewc_loss_func=ewc_loss_func,
-        replay_fcts=replay_fcts)
+        target_net, hnet, dnet, device, config, shared, logger, writer,
+        ctx_masks, summary_keywords, summary_filename,
+        task_loss_func=task_loss_func, accuracy_func=accuracy_func,
+        ewc_loss_func=ewc_loss_func, replay_fcts=replay_fcts)
 
     stu.log_results(test_acc, config, logger)
 

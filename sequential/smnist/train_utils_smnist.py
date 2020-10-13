@@ -200,8 +200,8 @@ def get_accuracy_func(config):
     def get_accuracy(logit_outputs, targets, data, batch_ids):
         """Get the accuracy for an SMNIST task.
 
-        Note that here we expect that, in the multi-head scenario, the correct 
-        output head has already been selected, and ``logit_outputs`` corresponds 
+        Note that here we expect that, in the multi-head scenario, the correct
+        output head has already been selected, and ``logit_outputs`` corresponds
         to the outputs in the correct head.
 
         Args:
@@ -209,8 +209,8 @@ def get_accuracy_func(config):
                 :func:`sequential.copy.train_utils_copy.get_accuracy`.
 
         Returns:
-            (....) See docstring of function
-                :func:`sequential.copy.train_utils_copy.get_accuracy`.
+            See docstring of function
+            :func:`sequential.copy.train_utils_copy.get_accuracy`.
         """
         seq_lengths = data.get_out_seq_lengths(batch_ids)
 
@@ -238,7 +238,7 @@ def get_vae_rec_loss_func():
     Returns:
         (func): A function handle.
     """
-    # Note, I haven't though to much about whether the MSE loss makes sense for
+    # Note, I haven't thought to much about whether the MSE loss makes sense for
     # this dataset.
     # Note, we don't apply any masking to the loss for a reason. One might
     # think, it is smart to mask the zero-padded part in the reconstruction

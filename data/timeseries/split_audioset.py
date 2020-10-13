@@ -25,6 +25,7 @@ Split Audioset Dataset
 
 The module :mod:`data.timeseries.split_audioset` contains a wrapper for data
 handlers for the SplitAudioset task.
+It is based on the module :mod:`data.special.split_mnist`.
 """
 import numpy as np
 from sklearn.model_selection import train_test_split

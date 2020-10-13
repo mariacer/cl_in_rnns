@@ -31,8 +31,6 @@ from sequential.copy import hp_search_copy_multitask as hpcopy_mt
 
 grid = {
     ## Continual Learning Options ###
-    #'beta': [.005],
-    #'train_from_scratch': [False],
     #'multi_head': [False],
     #'num_tasks': [5],
     #'num_classes_per_task': [2],
@@ -81,6 +79,7 @@ grid = {
     #'nh_hnet_specnorm': [False],
     #'nh_shmlp_chunk_sizes': ['8'],
     #'nh_shmlp_chunk_fc_layers': [False],
+    #'nh_separate_out_head': [False],
     'use_new_hnet': [False],
 
     ### Initialization Options ###
@@ -180,9 +179,10 @@ _PERFORMANCE_SORT_ASC = False
 # script. The function handle should expect the list of command line options
 # as only parameter.
 # Example:
-# from sequential.smnist import train_args_smnist as targs
-# f = lambda argv : targs.parse_cmd_arguments(argv=argv)
-# _ARGPARSE_HANDLE = f
+# >>> from classifier.imagenet import train_args as targs
+# >>> f = lambda argv : targs.parse_cmd_arguments(mode='cl_ilsvrc_cub',
+# ...                                             argv=argv)
+# >>> _ARGPARSE_HANDLE = f
 from sequential.smnist import train_args_smnist as targs
 f = lambda argv : targs.parse_cmd_arguments(argv=argv)
 _ARGPARSE_HANDLE = f

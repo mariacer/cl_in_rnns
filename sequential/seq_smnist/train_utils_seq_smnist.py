@@ -24,8 +24,11 @@ Useful functions for training a recurrent network on the sequential SMNIST task.
 """
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from data.timeseries.seq_smnist import SeqSMNIST
+from mnets.classifier_interface import Classifier
+from sequential.replay_utils import gauss_reconstruction_loss
 from sequential import train_utils_sequential as tuseq
 
 def _generate_tasks(config, logger, writer=None):
@@ -64,8 +67,8 @@ def _generate_tasks(config, logger, writer=None):
     for i,dp in enumerate(digit_pairs):
         rseed = r_state.randint(100000)
         d = SeqSMNIST('../../datasets', use_one_hot=True,
-            sequence_length=config.ssmnist_seq_len, digits=dp, num_train=4000,
-            num_test=1000, num_val=config.val_set_size, rseed=rseed,
+            sequence_length=config.ssmnist_seq_len, digits=dp, num_train=12000,
+            num_test=2000, num_val=config.val_set_size, rseed=rseed,
             two_class=config.ssmnist_two_classes)
 
         # FIXME not a really nice solution to temper with internal attributes.
@@ -228,3 +231,88 @@ def get_accuracy_func(config):
         return accuracy, None # accuracy per ts not yet implemented
 
     return get_accuracy
+
+def get_vae_rec_loss_func():
+    """Get the reconstruction loss function for the replay VAE.
+
+    Returns:
+        (func): A function handle.
+    """
+    # See comment in function `sequential.smnist.train_utils_smnist.\
+    # get_vae_rec_loss_func`.
+    return gauss_reconstruction_loss
+
+def get_distill_loss_func():
+    """Get the loss function for distilling soft targets into the classifier.
+
+    The returned function will make use of the end-of-digit information
+    associated with individual SMNIST images. If 3 SMNIST images are
+    concatenated, then the correct class label should be outputted at the end-
+    of-digit bit of last digit. Hence, we simply take the 3 maximum values
+    across the end-of-digit feature and the last occuring max value is
+    considered the distillation timestep.
+
+    Returns:
+        (func): A function handle.
+    """
+    def distill_loss_fct(config, X, Y_logits, T_soft_logits, data):
+        assert np.all(np.equal(X.shape[:2], T_soft_logits.shape[:2]))
+        # Note, targets and predictions might have different head sizes if a
+        # growing softmax is used.
+        assert np.all(np.equal(Y_logits.shape[:2], T_soft_logits.shape[:2]))
+
+        # Disillation temperature.
+        T=2.
+
+        n_digs = config.ssmnist_seq_len
+
+        # Note, smnist samples have the end-of-sequence bit as last
+        # timestep, the rest is padded. Since there are `n_digs` digits per
+        # sample, we consider the last end-of-sequence digit to determine the
+        # unpadded sequence length.
+        eod_features = X[:, :, 3].cpu().numpy()
+        seq_lengths = np.argsort(eod_features, axis=0)[-n_digs:].max(axis=0)
+        inds = seq_lengths - 1
+        inds[inds < 0] = 0
+
+        # Only compute loss for last timestep.
+        Y_logits = Y_logits[inds, np.arange(inds.size), :]
+        T_soft_logits = T_soft_logits[inds, np.arange(inds.size), :]
+
+        target_mapping = None
+        if config.all_task_softmax:
+            target_mapping = list(range(T_soft_logits.shape[1]))
+
+        return Classifier.knowledge_distillation_loss(Y_logits,
+            T_soft_logits, target_mapping=target_mapping,
+            device=Y_logits.device, T=T)
+
+    return distill_loss_fct
+
+def get_soft_trgt_acc_func():
+    """Get the accuracy function that can deal with generated soft targets.
+
+    Returns:
+        (func): A function handle.
+    """
+    def soft_trgt_acc_fct(config, X, Y_logits, T_soft_logits, data):
+        n_digs = config.ssmnist_seq_len
+
+        eod_features = X[:, :, 3].cpu().numpy()
+        seq_lengths = np.argsort(eod_features, axis=0)[-n_digs:].max(axis=0)
+        inds = seq_lengths - 1
+        inds[inds < 0] = 0
+
+        # Only compute accuracy for last timestep.
+        Y_logits = Y_logits[inds, np.arange(inds.size), :]
+        T_soft_logits = T_soft_logits[inds, np.arange(inds.size), :]
+
+        predicted = Y_logits.argmax(dim=1)
+        label = T_soft_logits.argmax(dim=1)
+
+        accuracy = 100. * (predicted == label).sum().cpu().item() / \
+            inds.size
+
+        return accuracy
+
+    return soft_trgt_acc_fct

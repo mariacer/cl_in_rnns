@@ -39,7 +39,6 @@ import numpy as np
 from mnets.mnet_interface import MainNetInterface
 from utils.torch_utils import init_params
 
-
 class SimpleRNN(nn.Module, MainNetInterface):
     """Implementation of a simple RNN.
 
@@ -139,8 +138,8 @@ class SimpleRNN(nn.Module, MainNetInterface):
             can process the same context-modulation related arguments as class
             :class:`mnets.mlp.MLP` (plus the additional ones noted above).
     """
-    def __init__(self, n_in=1, rnn_layers=(10), fc_layers_pre=(), fc_layers=(1),
-                 activation=torch.nn.Tanh(), use_lstm=False,
+    def __init__(self, n_in=1, rnn_layers=(10,), fc_layers_pre=(),
+                 fc_layers=(1,), activation=torch.nn.Tanh(), use_lstm=False,
                  use_bias=True, no_weights=False,
                  init_weights=None, kaiming_rnn_init=False,
                  context_mod_last_step=False,
@@ -538,115 +537,32 @@ class SimpleRNN(nn.Module, MainNetInterface):
         """Getter for read-only attribute :attr:`use_lstm`."""
         return self._use_lstm
 
-    def forward(self, x, weights=None, distilled_params=None, condition=None,
-                return_hidden=False, return_hidden_int=False):
-        """Compute the output :math:`y` of this network given the input
-        :math:`x`.
+    def split_cm_weights(self, cm_weights, condition, num_ts=0):
+        """Split context-mod weights per context-mod layer.
 
         Args:
-            (....): See docstring of method
-                :meth:`mnets.mnet_interface.MainNetInterface.forward`. We
-                provide some more specific information below.
-            weights (list or dict): See argument ``weights`` of method
-                :meth:`mnets.mlp.MLP.forward`.
+            cm_weights (torch.Tensor): All context modulation weights.
             condition (optional, int): If provided, then this argument will be
                 passed as argument ``ckpt_id`` to the method
                 :meth:`utils.context_mod_layer.ContextModLayer.forward`.
-            return_hidden_int (optional, boolean): If True, the internal 
-                recurrent hidden activations will be returned.
+            num_ts (int): The length of the sequences.
 
         Returns:
-            (torch.Tensor or tuple): Where the tuple is containing:
+            (Tuple): Where the tuple contains:
 
-            - **output** (torch.Tensor): The output of the network.
-            - **hidden** (list): If ``return_hidden`` is ``True``, then the
-              hidden activities of each layer are returned, which have the shape
-              ``(seq_length, batch_size, n_hidden)``. If ``return_hidden`` is
-              ``False``, then only ``output`` is returned.
+            - **cm_inputs_weights**: The cm input weights.
+            - **cm_fc_pre_layer_weights**: The cm pre-recurrent weights.
+            - **cm_rec_layer_weights**: The cm recurrent weights.
+            - **cm_fc_layer_weights**: The cm post-recurrent weights.
+            - **n_cm_rec**: The number of recurrent cm layers.
+            - **cmod_cond**: The context-mod condition.
         """
-        assert distilled_params is None
 
-        if ((not self._use_context_mod and self._no_weights) or \
-                (self._no_weights or self._context_mod_no_weights)) and \
-                weights is None:
-            raise Exception('Network was generated without weights. ' +
-                            'Hence, "weights" option may not be None.')
-
-        ############################################
-        ### Extract which weights should be used ###
-        ############################################
-        # I.e., are we using internally maintained weights or externally given
-        # ones or are we even mixing between these groups.
-        ### FIXME Code copied from MLP its `forward` method ###
-
-        # Make sure cm_weights are either None or have the correct dimensions.
-        n_cm = self._num_context_mod_shapes()
-
-        if weights is None:
-            weights = self.weights
-
-            if self._use_context_mod:
-                cm_weights = weights[:n_cm]
-                int_weights = weights[n_cm:]
-            else:
-                cm_weights = None
-                int_weights = weights
-        else:
-            int_weights = None
-            cm_weights = None
-
-            if isinstance(weights, dict):
-                assert 'internal_weights' in weights.keys() or \
-                       'mod_weights' in weights.keys()
-                if 'internal_weights' in weights.keys():
-                    int_weights = weights['internal_weights']
-                if 'mod_weights' in weights.keys():
-                    cm_weights = weights['mod_weights']
-            else:
-                if self._use_context_mod and \
-                        len(weights) == n_cm:
-                    cm_weights = weights
-                else:
-                    assert len(weights) == len(self.param_shapes)
-                    if self._use_context_mod:
-                        cm_weights = weights[:n_cm]
-                        int_weights = weights[n_cm:]
-                    else:
-                        int_weights = weights
-
-            if self._use_context_mod and cm_weights is None:
-                if self._context_mod_no_weights:
-                    raise Exception('Network was generated without weights ' +
-                        'for context-mod layers. Hence, they must be passed ' +
-                        'via the "weights" option.')
-                cm_weights = self.weights[:n_cm]
-            if int_weights is None:
-                if self._no_weights:
-                    raise Exception('Network was generated without internal ' +
-                        'weights. Hence, they must be passed via the ' +
-                        '"weights" option.')
-                if self._context_mod_no_weights:
-                    int_weights = self.weights
-                else:
-                    int_weights = self.weights[n_cm:]
-
-            # Note, context-mod weights might have different shapes, as they
-            # may be parametrized on a per-sample basis.
-            if self._use_context_mod:
-                assert len(cm_weights) == n_cm
-            int_shapes = self.param_shapes[n_cm:]
-            assert len(int_weights) == len(int_shapes)
-            for i, s in enumerate(int_shapes):
-                assert np.all(np.equal(s, list(int_weights[i].shape)))
-
-        ### FIXME Code copied until here ###
-
-        num_ts = x.shape[0]
-
-        ### Split context-mod weights per context-mod layer.
         n_cm_rec = -1
         cm_fc_pre_layer_weights = None
         cm_fc_layer_weights = None
+        cm_inputs_weights = None
+        cm_rec_layer_weights = None
         if cm_weights is not None:
             if self._context_mod_num_ts != -1 and \
                     self._context_mod_separate_layers_per_ts:
@@ -655,7 +571,6 @@ class SimpleRNN(nn.Module, MainNetInterface):
             # Note, an mnet layer might contain multiple context-mod layers
             # (a recurrent layer can have a separate context-mod layer per
             # timestep).
-            cm_inputs_weights = None
             cm_fc_pre_layer_weights = []
             cm_rec_layer_weights = [[] for _ in range(self._num_rec_cm_layers)]
             cm_fc_layer_weights = []
@@ -729,7 +644,44 @@ class SimpleRNN(nn.Module, MainNetInterface):
             if len(cm_fc_layer_weights) < len(self._fc_layers):
                 cm_fc_layer_weights.append(None)
 
-        ### Extract internal weights.
+
+        #######################
+        ### Parse condition ###
+        #######################
+        cmod_cond = None
+        if condition is not None:
+            assert isinstance(condition, int)
+            cmod_cond = condition
+
+            # Note, the cm layer will ignore the cmod condition if weights
+            # are passed.
+            # FIXME Find a more elegant solution.
+            cm_inputs_weights = None
+            cm_fc_pre_layer_weights = [None] * len(cm_fc_pre_layer_weights)
+            cm_rec_layer_weights = [[None] * len(cm_ws) for cm_ws in \
+                                    cm_rec_layer_weights]
+            cm_fc_layer_weights = [None] * len(cm_fc_layer_weights)
+
+        return cm_inputs_weights, cm_fc_pre_layer_weights, cm_fc_layer_weights,\
+            cm_rec_layer_weights, n_cm_rec, cmod_cond
+
+    def split_internal_weights(self, int_weights):
+        """Split internal weights per layer.
+
+        Args:
+            int_weights (torch.Tensor): All internal weights.
+
+        Returns:
+            (Tuple): Where the tuple contains:
+
+            - **fc_pre_w_weights**: The pre-recurrent w weights.
+            - **fc_pre_b_weights**: The pre-recurrent b weights.
+            - **rec_weights**: The recurrent weights.
+            - **fc_w_weights**:The post-recurrent w weights.
+            - **fc_b_weights**: The post-recurrent b weights.
+        """
+        n_cm = self._num_context_mod_shapes()
+
         int_meta = self.param_shapes_meta[n_cm:]
         assert len(int_meta) == len(int_weights)
         fc_pre_w_weights = []
@@ -774,23 +726,148 @@ class SimpleRNN(nn.Module, MainNetInterface):
             assert len(fc_b_weights) == 0
             fc_b_weights = [None] * len(fc_w_weights)
 
-        #######################
-        ### Parse condition ###
-        #######################
+        return fc_pre_w_weights, fc_pre_b_weights, rec_weights, fc_w_weights, \
+            fc_b_weights
 
-        cmod_cond = None
-        if condition is not None:
-            assert isinstance(condition, int)
-            cmod_cond = condition
+    def split_weights(self, weights):
+        """Split weights into internal and context-mod weights.
 
-            # Note, the cm layer will ignore the cmod condition if weights
-            # are passed.
-            # FIXME Find a more elegant solution.
-            cm_inputs_weights = None
-            cm_fc_pre_layer_weights = [None] * len(cm_fc_pre_layer_weights)
-            cm_rec_layer_weights = [[None] * len(cm_ws) for cm_ws in \
-                                    cm_rec_layer_weights]
-            cm_fc_layer_weights = [None] * len(cm_fc_layer_weights)
+        Extract which weights should be used,  I.e., are we using internally
+        maintained weights or externally given ones or are we even mixing
+        between these groups.
+
+        Args:
+            weights (torch.Tensor): All weights.
+
+        Returns:
+            (Tuple): Where the tuple contains:
+
+            - **int_weights**: The internal weights.
+            - **cm_weights**: The context-mod weights.
+        """
+        n_cm = self._num_context_mod_shapes()
+
+        ### FIXME Code copied from MLP its `forward` method ###
+
+        # Make sure cm_weights are either `None` or have the correct dimensions.
+        if weights is None:
+            weights = self.weights
+
+            if self._use_context_mod:
+                cm_weights = weights[:n_cm]
+                int_weights = weights[n_cm:]
+            else:
+                cm_weights = None
+                int_weights = weights
+        else:
+            int_weights = None
+            cm_weights = None
+
+            if isinstance(weights, dict):
+                assert 'internal_weights' in weights.keys() or \
+                       'mod_weights' in weights.keys()
+                if 'internal_weights' in weights.keys():
+                    int_weights = weights['internal_weights']
+                if 'mod_weights' in weights.keys():
+                    cm_weights = weights['mod_weights']
+            else:
+                if self._use_context_mod and \
+                        len(weights) == n_cm:
+                    cm_weights = weights
+                else:
+                    assert len(weights) == len(self.param_shapes)
+                    if self._use_context_mod:
+                        cm_weights = weights[:n_cm]
+                        int_weights = weights[n_cm:]
+                    else:
+                        int_weights = weights
+
+            if self._use_context_mod and cm_weights is None:
+                if self._context_mod_no_weights:
+                    raise Exception('Network was generated without weights ' +
+                        'for context-mod layers. Hence, they must be passed ' +
+                        'via the "weights" option.')
+                cm_weights = self.weights[:n_cm]
+            if int_weights is None:
+                if self._no_weights:
+                    raise Exception('Network was generated without internal ' +
+                        'weights. Hence, they must be passed via the ' +
+                        '"weights" option.')
+                if self._context_mod_no_weights:
+                    int_weights = self.weights
+                else:
+                    int_weights = self.weights[n_cm:]
+
+            # Note, context-mod weights might have different shapes, as they
+            # may be parametrized on a per-sample basis.
+            if self._use_context_mod:
+                assert len(cm_weights) == n_cm
+            int_shapes = self.param_shapes[n_cm:]
+            assert len(int_weights) == len(int_shapes)
+            for i, s in enumerate(int_shapes):
+                assert np.all(np.equal(s, list(int_weights[i].shape)))
+
+        ### FIXME Code copied until here ###
+        return int_weights, cm_weights
+
+    def forward(self, x, weights=None, distilled_params=None, condition=None,
+                return_hidden=False, return_hidden_int=False):
+        """Compute the output :math:`y` of this network given the input
+        :math:`x`.
+
+        Args:
+            (....): See docstring of method
+                :meth:`mnets.mnet_interface.MainNetInterface.forward`. We
+                provide some more specific information below.
+            weights (list or dict): See argument ``weights`` of method
+                :meth:`mnets.mlp.MLP.forward`.
+            condition (optional, int): If provided, then this argument will be
+                passed as argument ``ckpt_id`` to the method
+                :meth:`utils.context_mod_layer.ContextModLayer.forward`.
+            return_hidden (bool, optional): If ``True``, all hidden activations
+                of fully-connected and recurrent layers (where we defined
+                :math:`y_t` as hidden state of vannila RNN layers as these are
+                the layer outputs passed to the next layer) are returned.
+                recurrent hidden activations will be returned.
+            return_hidden_int (bool, optional): If ``True``, in addition to
+                ``hidden``, an additional variable ``hidden_int`` is returned
+                containing the internal hidden states of recurrent layers (i.e.,
+                the cell states :math:`c_t` for LSTMs and the actual hidden
+                state :math:`h_t` for Elman layers) are returned.
+
+        Returns:
+            (torch.Tensor or tuple): Where the tuple is containing:
+
+            - **output** (torch.Tensor): The output of the network.
+            - **hidden** (list): If ``return_hidden`` is ``True``, then the
+              hidden activities of each layer are returned, which have the shape
+              ``(seq_length, batch_size, n_hidden)``.
+            - **hidden_int**: If ``return_hidden_int`` is ``True``, then in
+              addition to ``hidden`` a tensor ``hidden_int`` is returned
+              containing internal hidden states of recurrent layers.
+        """
+        assert distilled_params is None
+
+        if ((not self._use_context_mod and self._no_weights) or \
+                (self._no_weights or self._context_mod_no_weights)) and \
+                weights is None:
+            raise Exception('Network was generated without weights. ' +
+                            'Hence, "weights" option may not be None.')
+
+        #######################
+        ### Extract weights ###
+        #######################
+        # Extract which weights should be used.
+        int_weights, cm_weights = self.split_weights(weights)
+
+        ### Split context-mod weights per context-mod layer.
+        cm_inputs_weights, cm_fc_pre_layer_weights, cm_fc_layer_weights, \
+            cm_rec_layer_weights, n_cm_rec, cmod_cond = self.split_cm_weights(
+                cm_weights, condition, num_ts=x.shape[0])
+
+        ### Extract internal weights.
+        fc_pre_w_weights, fc_pre_b_weights, rec_weights, fc_w_weights, \
+            fc_b_weights = self.split_internal_weights(int_weights)
 
         ###########################
         ### Forward Computation ###
@@ -808,64 +885,10 @@ class SimpleRNN(nn.Module, MainNetInterface):
             h = self._context_mod_layers[0].forward(h,
                 weights=cm_inputs_weights, ckpt_id=cmod_cond, bs_dim=1)
 
-        def compute_fc_outputs(h, fc_w_weights, fc_b_weights, num_fc_cm_layers,
-                    cm_fc_layer_weights, cm_offset, cmod_cond, is_post_fc):
-            """Compute the forward pass through the fully-connected layers.
-
-            This functions appends activations to ``ret_hidden``.
-
-            Args:
-                h (torch.tensor): The input from the previous layer.
-                fc_w_weights (list): The weights for the fc layers.
-                fc_b_weights (list): The biases for the fc layers.
-                num_fc_cm_layers (int): The number of context-modulation
-                    layers associated with this set of fully-connected layers.
-                cm_fc_layer_weights (list): The context-modulation weights
-                    associated with the current layers.
-                cm_offset (int): The index to access the correct context-mod
-                    layers.
-                cmod_cond (bool): Some condition to perform context modulation.
-                is_post_fc (bool); Whether those layers are applied as last
-                    layers of the network. In this case, there will be no
-                    activation applied to the last layer outputs.
-
-            Return:
-                (torch.Tensor): Transformed activation ``h``.
-            """
-            nonlocal ret_hidden
-
-            for d in range(len(fc_w_weights)):
-                use_cm = self._use_context_mod and d < num_fc_cm_layers
-                # Compute output.
-                h = F.linear(h, fc_w_weights[d], bias=fc_b_weights[d])
-
-                # Context-dependent modulation (pre-activation).
-                if use_cm and not self._context_mod_post_activation:
-                    h = self._context_mod_layers[cm_offset+d].forward(h,
-                        weights=cm_fc_layer_weights[d], ckpt_id=cmod_cond, 
-                        bs_dim=1)
-
-                # Non-linearity
-                # Note, non-linearity is not applied to outputs of the network.
-                if self._a_fun is not None and \
-                        (not is_post_fc or d < len(fc_w_weights)-1):
-                    h = self._a_fun(h)
-
-                # Context-dependent modulation (post-activation).
-                if use_cm and self._context_mod_post_activation:
-                    h = self._context_mod_layers[cm_offset+d].forward(h,
-                        weights=cm_fc_layer_weights[d], ckpt_id=cmod_cond, 
-                        bs_dim=1)
-
-                if ret_hidden is not None:
-                    ret_hidden.append(h)
-
-            return h
-
         ### Initial fully-connected layer activities.
-        h = compute_fc_outputs(h, fc_pre_w_weights, \
+        ret_hidden, h = self.compute_fc_outputs(h, fc_pre_w_weights, \
             fc_pre_b_weights, len(self._fc_layers_pre), \
-            cm_fc_pre_layer_weights, cm_offset, cmod_cond, False)
+            cm_fc_pre_layer_weights, cm_offset, cmod_cond, False, ret_hidden)
 
         ### Recurrent layer activities.
         ret_hidden_int = [] # the internal hidden activations
@@ -873,18 +896,18 @@ class SimpleRNN(nn.Module, MainNetInterface):
             if self._use_context_mod:
                 h, h_int = self.compute_hidden_states(h, d, rec_weights[d],
                     cm_rec_layer_weights[d], cmod_cond)
-            else: 
-                h, h_int = self.compute_hidden_states(h, d, rec_weights[d], 
-                    None, None)
+            else:
+                h, h_int = self.compute_hidden_states(h, d, rec_weights[d],
+                                                      None, None)
             if ret_hidden is not None:
                 ret_hidden.append(h)
                 ret_hidden_int.append(h_int)
 
         ### Fully-connected layer activities.
         cm_offset = self._cm_rnn_start_ind + n_cm_rec
-        h = compute_fc_outputs(h, fc_w_weights, fc_b_weights, \
+        ret_hidden, h = self.compute_fc_outputs(h, fc_w_weights, fc_b_weights, \
             self._num_fc_cm_layers, cm_fc_layer_weights, cm_offset, cmod_cond,
-            True)
+            True, ret_hidden)
 
         # FIXME quite ugly
         if return_hidden:
@@ -893,14 +916,69 @@ class SimpleRNN(nn.Module, MainNetInterface):
             if return_hidden_int:
                 return h, ret_hidden, ret_hidden_int
             else:
-                return h, ret_hidden 
-        else: 
-            # To avoid bugs, the internal hidden activity can only be returned
-            # if the visible hidden states are also returned.
+                return h, ret_hidden
+        else:
             return h
 
+    def compute_fc_outputs(self, h, fc_w_weights, fc_b_weights, num_fc_cm_layers,
+                cm_fc_layer_weights, cm_offset, cmod_cond, is_post_fc, 
+                ret_hidden):
+        """Compute the forward pass through the fully-connected layers.
+
+        This method also appends activations to ``ret_hidden``.
+
+        Args:
+            h (torch.Tensor): The input from the previous layer.
+            fc_w_weights (list): The weights for the fc layers.
+            fc_b_weights (list): The biases for the fc layers.
+            num_fc_cm_layers (int): The number of context-modulation
+                layers associated with this set of fully-connected layers.
+            cm_fc_layer_weights (list): The context-modulation weights
+                associated with the current layers.
+            cm_offset (int): The index to access the correct context-mod
+                layers.
+            cmod_cond (bool): Some condition to perform context modulation.
+            is_post_fc (bool); Whether those layers are applied as last
+                layers of the network. In this case, there will be no
+                activation applied to the last layer outputs.
+            ret_hidden (list or None): The hidden recurrent activations.
+
+        Return:
+            (Tuple): Tuple containing:
+
+            - **ret_hidden**: The hidden recurrent activations.
+            - **h**: Transformed activation ``h``.
+        """
+        for d in range(len(fc_w_weights)):
+            use_cm = self._use_context_mod and d < num_fc_cm_layers
+            # Compute output.
+            h = F.linear(h, fc_w_weights[d], bias=fc_b_weights[d])
+
+            # Context-dependent modulation (pre-activation).
+            if use_cm and not self._context_mod_post_activation:
+                h = self._context_mod_layers[cm_offset+d].forward(h,
+                    weights=cm_fc_layer_weights[d], ckpt_id=cmod_cond, 
+                    bs_dim=1)
+
+            # Non-linearity
+            # Note, non-linearity is not applied to outputs of the network.
+            if self._a_fun is not None and \
+                    (not is_post_fc or d < len(fc_w_weights)-1):
+                h = self._a_fun(h)
+
+            # Context-dependent modulation (post-activation).
+            if use_cm and self._context_mod_post_activation:
+                h = self._context_mod_layers[cm_offset+d].forward(h,
+                    weights=cm_fc_layer_weights[d], ckpt_id=cmod_cond, 
+                    bs_dim=1)
+
+            if ret_hidden is not None:
+                ret_hidden.append(h)
+
+        return ret_hidden, h
+
     def compute_hidden_states(self, x, layer_ind, int_weights, cm_weights,
-                              ckpt_id):
+                              ckpt_id, h_0=None, c_0=None):
         """Compute the hidden states for the recurrent layer ``layer_ind`` from
         a sequence of inputs :math:`x`.
 
@@ -916,14 +994,21 @@ class SimpleRNN(nn.Module, MainNetInterface):
             ckpt_id: Will be passed as option ``ckpt_id`` to method
                 :meth:`utils.context_mod_layer.ContextModLayer.forward` if
                 context-mod layers are used.
+            h_0 (torch.Tensor, optional): The initial state for :math:`h`.
+            c_0 (torch.Tensor, optional): The initial state for :math:`c`. Note
+                that for LSTMs, if the initial state is to be defined, this
+                variable is necessary also, not only :math:`h_0`, whereas for
+                vanilla RNNs it is enough to provide :math:`h_0` as :math:`c_0`
+                represents the output of the layer and it can be easily computed
+                from `h_0`.
 
         Returns:
             (tuple): Tuple containing:
 
-            - **outputs** (torch.Tensor): The sequence of visible hidden states 
+            - **outputs** (torch.Tensor): The sequence of visible hidden states
               given the input. It has shape 
               ``[sequence_len, batch_size, n_hidden]``.
-            - **hiddens** (torch.Tensor): The sequence of hidden states given 
+            - **hiddens** (torch.Tensor): The sequence of hidden states given
               the input. For LSTMs, this corresponds to :math:`c`.
               It has shape ``[sequence_len, batch_size, n_hidden]``.
         """
@@ -935,8 +1020,12 @@ class SimpleRNN(nn.Module, MainNetInterface):
         # c_0 is the internal cell state vector.
         # For a vanilla RNN h_0 is the hidden state whereas c_0 is the output
         # vector.
-        h_0 = (torch.zeros(batch_size, n_hidden, device=x.device))
-        c_0 = (torch.zeros(batch_size, n_hidden, device=x.device))
+        if h_0 is None:
+            h_0 = (torch.zeros(batch_size, n_hidden, device=x.device))
+        if c_0 is None:
+            c_0 = (torch.zeros(batch_size, n_hidden, device=x.device))
+        assert h_0.shape[0] == c_0.shape[0] == batch_size
+        assert h_0.shape[1] == c_0.shape[1] == n_hidden
 
         # If we want to apply context modulation in each time step, we need
         # to split the input sequence and call pytorch function at every
@@ -1045,16 +1134,12 @@ Recurrent_neural_network#Elman_networks_and_Jordan_networks>`__.
             bias_ih = int_weights[1]
             weight_hh = int_weights[2]
             bias_hh = int_weights[3]
-            weight_ho = int_weights[4]
-            bias_ho = int_weights[5]
         else:
             assert len(int_weights) == 3
             weight_ih = int_weights[0]
             bias_ih = None
             weight_hh = int_weights[1]
             bias_hh = None
-            weight_ho = int_weights[2]
-            bias_ho = None
 
         ###########################
         ### Update hidden state ###
@@ -1085,6 +1170,30 @@ Recurrent_neural_network#Elman_networks_and_Jordan_networks>`__.
         ######################
         ### Compute output ###
         ######################
+        y_t = self.compute_basic_rnn_output(h_t, int_weights, use_cm, 
+            cm_weights, cm_idx, ckpt_id, is_last_step)
+
+        return h_t, y_t
+
+    def compute_basic_rnn_output(self, h_t, int_weights, use_cm, cm_weights,
+                                 cm_idx, ckpt_id, is_last_step):
+        """Compute the output of a vanilla RNN given the hidden state.
+
+        Args:
+            (...): See docstring of method :meth:`basic_rnn_step`.
+            use_cm (boolean): Whether context modulation is being used.
+            cm_idx (int): Index of the context-mod layer.
+
+        Returns:
+            (torch.tensor): The output.
+        """
+        if self.has_bias:
+            weight_ho = int_weights[4]
+            bias_ho = int_weights[5]
+        else:
+            weight_ho = int_weights[2]
+            bias_ho = None
+
         y_t = h_t @ weight_ho.t()
         if self.has_bias:
             y_t += bias_ho
@@ -1104,8 +1213,7 @@ Recurrent_neural_network#Elman_networks_and_Jordan_networks>`__.
             if not self._context_mod_last_step or is_last_step:
                 y_t = self._context_mod_layers[cm_idx].forward(y_t,
                     weights=cm_weights, ckpt_id=ckpt_id)
-
-        return h_t, y_t
+        return y_t
 
     def lstm_rnn_step(self, d, t, x_t, h_t, int_weights, cm_weights, ckpt_id,
                       is_last_step):
@@ -1249,28 +1357,28 @@ in-pytorch-lstms-in-depth-part-1/
 
         Returns:
             (list): List of weights from
-            :attr:`mnets.mnet_interface.MainNetInterface.weights` that are
-            belonging to context-mod layers.
+            :attr:`mnets.mnet_interface.MainNetInterface.internal_params` that
+            are belonging to context-mod layers.
         """
         n_cm = self._num_context_mod_shapes()
 
         if n_cm == 0 or self._context_mod_no_weights:
             raise ValueError('Network maintains no context-modulation weights.')
 
-        return self.weights[:n_cm]
+        return self.internal_params[:n_cm]
 
     def get_non_cm_weights(self):
         """Get internal weights that are not associated with context-modulation.
 
         Returns:
             (list): List of weights from
-            :attr:`mnets.mnet_interface.MainNetInterface.weights` that are not
-            belonging to context-mod layers.
+            :attr:`mnets.mnet_interface.MainNetInterface.internal_params` that
+            are not belonging to context-mod layers.
         """
         n_cm = 0 if self._context_mod_no_weights else \
             self._num_context_mod_shapes()
 
-        return self.weights[n_cm:]
+        return self.internal_params[n_cm:]
 
     def get_cm_inds(self):
         """Get the indices of
@@ -1286,7 +1394,7 @@ in-pytorch-lstms-in-depth-part-1/
         ret = []
 
         for i, meta in enumerate(self.param_shapes_meta):
-            if meta['name'].startswith('cm_'):
+            if meta['name'] == 'cm_shift' or meta['name'] == 'cm_scale':
                 ret.append(i)
         assert n_cm == len(ret)
 

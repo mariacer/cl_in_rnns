@@ -283,5 +283,6 @@ def configure_matplotlib_params(fig_size = [6.4, 4.8], two_axes=True,
     }
 
     matplotlib.rcParams.update(params)
-    del matplotlib.font_manager.weight_dict['roman']
+    if 'roman' in matplotlib.font_manager.weight_dict:
+        del matplotlib.font_manager.weight_dict['roman']
     matplotlib.font_manager._rebuild()

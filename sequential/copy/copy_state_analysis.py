@@ -20,10 +20,10 @@
 # @version         :1.0
 # @python_version  :3.6.8
 """
-Study dimensionality of hidden states in permuted copy across pattern lengths.
-------------------------------------------------------------------------------
+Study dimensionality of hidden states in copy task variants
+-----------------------------------------------------------
 
-In this script, we perform an analysis of the dimensionality of the hidden 
+In this script, we perform an analysis of the dimensionality of the hidden
 states of a recurrent network, for different continual learning experiments
 where the permuted copy task has an increasing pattern length.
 
@@ -40,7 +40,7 @@ For running these analyses, one needs to have run before the following:
     python3 hpsearch.py --grid_module=ewc_study_config
 
 Making sure that the different runs have different complexities, and that they
-all have the following arguments activated for all runs: 
+all have the following arguments activated for all runs:
 `--store_final_models --store_during_models`.
 
 """

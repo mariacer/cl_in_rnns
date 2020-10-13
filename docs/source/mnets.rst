@@ -9,6 +9,13 @@ Main Networks
 .. note::
     All main networks should inherit from the abstract class :class:`mnets.mnet_interface.MainNetInterface` to provide a consistent interface for users.
 
+Module *bi_rnn*
+=====================
+
+.. automodule:: mnets.bi_rnn
+    :members:
+    :undoc-members:
+    :show-inheritance:
 
 Module *classifier_interface*
 =============================
@@ -17,7 +24,7 @@ Module *classifier_interface*
     :members:
     :undoc-members:
     :show-inheritance:
-
+    
 Module *mlp*
 ============
 
@@ -41,4 +48,3 @@ Module *simple_rnn*
     :members:
     :undoc-members:
     :show-inheritance:
-

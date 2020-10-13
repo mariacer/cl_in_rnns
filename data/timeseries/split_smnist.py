@@ -26,6 +26,7 @@ Split SMNIST Dataset
 The module :mod:`data.timeseries.split_smnist` contains a wrapper for data
 handlers for a set of SplitSMNIST tasks (a partitioning of classes from the
 :class:`data.timeseries.smnist_data.SMNISTData` dataset).
+The implementation is based on the module :mod:`data.special.split_mnist`.
 """
 import numpy as np
 

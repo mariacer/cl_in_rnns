@@ -27,6 +27,8 @@ The module :mod:`sequential.rnn_chunking` provides helpers to create
 instantiations of :class:`hnets.structured_mlp_hnet.StructuredHMLP` for target
 networks of class :class:`mnets.simple_rnn.SimpleRNN`.
 
+In principle, this module can be seen as an extension of module
+:mod:`hnets.structured_hmlp_examples`.
 """
 import numpy as np
 import torch
@@ -63,13 +65,8 @@ def simple_rnn_chunking(net, chunk_size=None, fc_chunking=False):
             chunked.
 
     Returns:
-        (tuple): Tuple containing the following arguments that can be passed
-        to the constructor of class
-        :class:`hnets.structured_mlp_hnet.StructuredHMLP`.
-
-        - **chunk_shapes** (list)
-        - **num_per_chunk** (list)
-        - **assembly_fct** (func)
+        (tuple): See return value of function
+        :func:`hnets.structured_hmlp_examples.resnet_chunking`.
     """
     if not isinstance(net, SimpleRNN):
         raise ValueError('Function only applies to networks of class ' +

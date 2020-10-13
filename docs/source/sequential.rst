@@ -21,11 +21,18 @@ Below you can find links to the documentation for the different datasets that we
 
    Audioset <audioset.rst>
    CopyTask <copy.rst>
+   PoS Tagging <pos_tagging.rst>
    SMNIST <smnist.rst>
    SSMNIST <seq_smnist.rst>
+   Random Recurrent Teachers <student_teacher.rst>
 
 API
 ===
+
+.. automodule:: sequential.embedding_utils
+    :members:
+    :undoc-members:
+    :show-inheritance:
 
 .. automodule:: sequential.gather_random_seeds
     :members:
@@ -42,11 +49,6 @@ API
     :undoc-members:
     :show-inheritance:
 
-.. automodule:: sequential.state_space_analysis
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 .. automodule:: sequential.train_args_sequential
     :members:
     :undoc-members:
@@ -58,6 +60,34 @@ API
     :show-inheritance:
     
 .. automodule:: sequential.train_utils_sequential
+    :members:
+    :undoc-members:
+    :show-inheritance:
+    
+API - State Space Analysis
+--------------------------
+
+.. automodule:: sequential.ht_analyses.out_head_subspace_similarity
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. automodule:: sequential.ht_analyses.pca_utils
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. automodule:: sequential.ht_analyses.state_space_analysis
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. automodule:: sequential.ht_analyses.state_space_plotting
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. automodule:: sequential.ht_analyses.supervised_dimred_utils
     :members:
     :undoc-members:
     :show-inheritance:

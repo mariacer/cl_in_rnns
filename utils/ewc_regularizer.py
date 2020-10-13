@@ -243,6 +243,15 @@ def compute_fisher(task_id, data, params, device, mnet, hnet=None,
                 used for NLL computation, then the ``custom_nll`` function needs
                 the ability to request this information (sequence length) from
                 ``data``.
+
+            Also, the signatures of ``custom_forward`` are expected to be
+            different.
+
+            The signature of this function should be as follows.
+
+            - ``hnet`` is ``None``: ``@fun(mnet, params, X, data, batch_ids)``
+            - ``hnet`` is not ``None``:
+              ``@fun(mnet, hnet, task_id, params, X, data, batch_ids)``
     """
     # Note, this function makes some assumptions about how to use either of
     # these networks. Before adding new main or hypernetwork classes to the
@@ -254,8 +263,13 @@ def compute_fisher(task_id, data, params, device, mnet, hnet=None,
     #   https://git.io/fjcnL
 
     # FIXME The `mnet` should be a subclass of the interface
-    # `MainNetInterface`.
-    assert(isinstance(mnet, MainNetInterface))
+    # `MainNetInterface`. Though, to ensure downwards compatibility, we allow
+    # the deprecated class `MainNetwork` as well for now. However, this class
+    # doesn't allow us to check for compatibility (e.g., ensuring that network
+    # output is linear).
+    #assert(isinstance(mnet, MainNetInterface) or \
+    #       isinstance(mnet, MainNetwork))
+    assert isinstance(mnet, MainNetInterface)
 
     # TODO Update method to work with other hypernetworks as well, especially
     # those implementing the new hypernetwork interface.
@@ -284,10 +298,10 @@ def compute_fisher(task_id, data, params, device, mnet, hnet=None,
     #    # computing the loss for classification tasks.
     #    assert(mnet.has_linear_out)
 
-    assert(hnet is None or task_id is not None)
-    assert(regression is False or empirical_fisher)
-    assert(not online or (gamma >= 0. and gamma <= 1.))
-    assert(n_max is -1 or n_max > 0)
+    assert hnet is None or task_id is not None
+    assert regression is False or empirical_fisher
+    assert not online or (gamma >= 0. and gamma <= 1.)
+    assert n_max == -1 or n_max > 0
 
     if time_series and regression:
         raise NotImplementedError('Computing the Fisher for a recurrent ' +
@@ -327,13 +341,20 @@ def compute_fisher(task_id, data, params, device, mnet, hnet=None,
             if custom_forward is None:
                 Y = mnet.forward(X, weights=params)
             else:
-                Y = custom_forward(mnet, params, X)
+                if pass_ids:
+                    Y = custom_forward(mnet, params, X, data, batch[2])
+                else:
+                    Y = custom_forward(mnet, params, X)
         else:
             if custom_forward is None:
                 weights = hnet.forward(task_id, theta=params)
                 Y = mnet.forward(X, weights=weights)
             else:
-                Y = custom_forward(mnet, hnet, task_id, params, X)
+                if pass_ids:
+                    Y = custom_forward(mnet, hnet, task_id, params, X, data,
+                                       batch[2])
+                else:
+                    Y = custom_forward(mnet, hnet, task_id, params, X)
 
         if not time_series:
             assert(len(Y.shape) == 2)

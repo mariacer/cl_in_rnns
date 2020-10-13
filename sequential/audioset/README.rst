@@ -19,11 +19,11 @@ Experiments - CL1
 Multitask
 ^^^^^^^^^
 
-The following run on a **multi-head 32 RNN** leads to around 69% final accuracy:
+The following run on a **multi-head 32 RNN** leads to around 77% final accuracy:
 
 .. code-block:: console
 
-    $ python3 train_split_audioset.py --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=64 --n_iter=25000 --lr=0.0001 --weight_decay=0 --adam_beta1=0.9 --clip_grad_norm=1.0 --rnn_arch=32 --net_act=tanh --use_cuda --multitask --orthogonal_hh_init --orthogonal_hh_reg=-1.0
+    $ python3 train_split_audioset.py --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=64 --n_iter=50000 --lr=0.0001 --clip_grad_norm=1 --rnn_arch="32" --net_act=tanh --use_cuda --multitask --orthogonal_hh_reg=-1
 
 Main network from scratch
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -108,6 +108,12 @@ The following run on a **multi-head 32 RNN** leads to around 67.5% final accurac
 
     $ python3 train_split_audioset.py --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=128 --n_iter=25000 --lr=0.0001 --clip_grad_norm=-1 --rnn_arch="32" --net_act=tanh --use_cuda --use_ewc --ewc_lambda=100.0 --n_fisher=-1
 
+The following run on a **multi-head 32 RNN where the task identity is provided as additional input** leads to around 71.74% during and 66.35% final accuracy:
+
+.. code-block:: console
+
+    $ python3 train_split_audioset.py --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=64 --n_iter=25000 --lr=0.0001 --clip_grad_norm=1 --rnn_arch="32" --net_act=tanh --use_cuda --input_task_identity --use_ewc --ewc_gamma=1.0 --ewc_lambda=10.0 --n_fisher=-1
+
 Synaptic Intelligence (SI)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -120,20 +126,20 @@ The following run on a **multi-head 32 RNN** leads to around 67% final accuracy:
 Masking
 ^^^^^^^
 
-The following run on a **multi-head 32 RNN** leads to around 49% final accuracy:
+The following run on a **multi-head 32 RNN** leads to around 55% final accuracy:
 
 .. code-block:: console
 
-    $ python3 train_split_audioset.py --no_context_mod_outputs --dont_softplus_gains --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=64 --n_iter=25000 --lr=0.0001 --clip_grad_norm=1 --rnn_arch="32" --net_act=tanh --use_cuda --use_masks --mask_fraction=0.8
+    $ python3 train_split_audioset.py --no_context_mod_outputs --dont_softplus_gains --si_lambda=0.0 --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=64 --n_iter=25000 --lr=0.0001 --clip_grad_norm=-1 --rnn_arch="32" --net_act=tanh --use_cuda --use_masks --mask_fraction=0.6 --during_acc_criterion=25
 
 Masking + Synpatic Intelligence (Masking + SI)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The following run on a **multi-head 32 RNN using SI** leads to around 57% final accuracy:
+The following run on a **multi-head 32 RNN using SI** leads to around 65% final accuracy:
 
 .. code-block:: console
 
-    $ python3 train_split_audioset.py --no_context_mod_outputs --dont_softplus_gains --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=64 --n_iter=25000 --lr=0.0001 --clip_grad_norm=-1 --rnn_arch="32" --net_act=tanh --use_cuda --use_masks --mask_fraction=0.8 --use_best_models --use_si --si_lambda=10.0 --si_task_loss_only
+    $ python3 train_split_audioset.py --no_context_mod_outputs --dont_softplus_gains --multi_head --num_tasks=10 --num_classes_per_task=10 --batch_size=64 --n_iter=25000 --lr=0.0001 --clip_grad_norm=1 --rnn_arch="32" --net_act=tanh --use_cuda --use_masks --mask_fraction=0.4 --during_acc_criterion=25 --use_si --si_lambda=100.0 --si_task_loss_only
 
 Coresets
 ^^^^^^^^

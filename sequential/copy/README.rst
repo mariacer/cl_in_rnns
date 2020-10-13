@@ -26,7 +26,7 @@ The following run on a multi-head RNN leads to around 100.00% accuracy:
 
 .. code-block:: console
 
-    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.0005 --clip_grad_norm=1  --use_vanilla_rnn --use_cuda --multitask --orthogonal_hh_reg=1.0 --permute_time --input_len_step=0 --input_len_variability=0 
+    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.0005 --clip_grad_norm=1  --use_vanilla_rnn --use_cuda --multitask --orthogonal_hh_reg=1.0 --permute_time --input_len_step=0 --input_len_variability=0
 
 
 Main network from scratch
@@ -71,6 +71,12 @@ The following run on a multi-head RNN leads to around 99.93% during and 98.66% f
 
     $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.001 --clip_grad_norm=1.0 --use_vanilla_rnn --use_cuda --use_ewc --ewc_gamma=1.0 --ewc_lambda=100.0 --n_fisher=-1  --orthogonal_hh_reg=0.01 --permute_time
 
+The following run on a **multi-head RNN where the task identity is provided as additional input** leads to around 97.61% during and 97.54% final accuracy:
+
+.. code-block:: console
+
+    $ python3 train_copy.py --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.01 --clip_grad_norm=1 --rnn_arch="256" --net_act=tanh --use_vanilla_rnn --use_cuda --input_task_identity --orthogonal_hh_init --orthogonal_hh_reg=1 --use_ewc --ewc_lambda=10000000.0 --n_fisher=200 --first_task_input_len=5 --input_len_step=0 --input_len_variability=0 --permute_time
+
 Synaptic Intelligence (SI)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -99,7 +105,7 @@ The following run on a multi-head RNN leads to around 100.00% during and 100.00%
 
     $ python3 train_copy.py --no_context_mod_outputs --dont_softplus_gains --multi_head --num_tasks=5 --batch_size=128 --n_iter=20000 --lr=0.005 --clip_grad_norm=100  --use_vanilla_rnn --orthogonal_hh_init --orthogonal_hh_reg=-1 --use_cuda --use_masks --use_si --si_task_loss_only --permute_time --input_len_step=0 --input_len_variability=0
 
-Generative Replay 
+Generative Replay
 ^^^^^^^^^^^^^^^^^
 
 The following run on a multi-head RNN leads to around 100.00% during and 100.00% final accuracy:

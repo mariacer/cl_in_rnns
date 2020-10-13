@@ -11,4 +11,4 @@ Sequential Stroke-MNIST experiments for continual learning
 API
 ---
 
-**TODO**    
+**TODO**

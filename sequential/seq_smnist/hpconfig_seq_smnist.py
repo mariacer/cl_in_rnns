@@ -14,8 +14,8 @@
 # limitations under the License.
 """
 - **title**          :sequential/smnist/hpconfig_smnist.py
-- **author**         :be,ch, mc
-- **contact**        :behret,henningc, mariacer@ethz.ch
+- **author**         :be, ch, mc
+- **contact**        :behret, henningc, mariacer@ethz.ch
 - **created**        :15/04/2020
 - **version**        :1.0
 - **python_version** :3.6.8
@@ -34,11 +34,10 @@ grid = {
     #'train_from_scratch': [False],
     #'multi_head': [False],
     'num_tasks': [5],
-    #'num_classes_per_task': [2],
 
     ### Training Options ###
     #'batch_size': [64],
-    'n_iter': [2000],
+    #'n_iter': [5000],
     #'lr': [1e-3],
     #'weight_decay': [0.],
     #'adam_beta1': [.9],
@@ -80,6 +79,7 @@ grid = {
     #'nh_hnet_specnorm': [False],
     #'nh_shmlp_chunk_sizes': ['8'],
     #'nh_shmlp_chunk_fc_layers': [False],
+    #'nh_separate_out_head': [False],
     'use_new_hnet': [False],
 
     ### Initialization Options ###
@@ -98,7 +98,7 @@ grid = {
     #'data_random_seed': [42],
     #'random_seed': [42],
     #'store_activations': [False],
-    #'multitask': [False],
+    #'train_only_heads_after_first': [False],
     #'train_tnet_once': [False],
     #'reinit_tnet': [False],
     #'input_task_identity': [False],
@@ -110,13 +110,11 @@ grid = {
     #'last_task_only': [False],
     #'ts_weighting': ['last'], # 'none', 'last', 'last_ten_percent',
                                # 'unpadded', 'discount'
-    #'orthogonal_hh_init': [False],
-    #'orthogonal_hh_reg': [-1],
     #'early_stopping_thld': [1e-3],
     #'es_warm_up_iter': [5000],
     #'es_best_val_diff': [.01],
-    'ssmnist_seq_len': [3],
-    #'analyse_hidden_pcs': [False],
+    #'orthogonal_hh_init': [False],
+    #'orthogonal_hh_reg': [-1],
     #'store_final_models': [False],
     #'store_during_models': [False],
     #'use_best_models': [False],
@@ -150,6 +148,30 @@ grid = {
     #'sparsify_context_mod': [False],
     #'sparsification_reg_strength': [1.],
     #'sparsification_reg_type': ['l1'], # 'l1', 'log'
+
+    ### Replay Options ###
+    #'use_replay': [False],
+    #'all_task_softmax': [False],
+    #'replay_pm_strength': [1.],
+    #'replay_rec_strength': [1.],
+    #'replay_distill_reg': [1.],
+    #'replay_true_data': [False],
+    #'coreset_size': [-1],
+    #'latent_dim': [100],
+    #'latent_std': [1.],
+
+    ### Replay Decoder Options ###
+    #'dec_srnn_rec_layers': ['"256"'],
+    #'dec_srnn_pre_fc_layers': ['""'],
+    #'dec_srnn_post_fc_layers': ['""'],
+    #'dec_srnn_no_fc_out': [False],
+    #'dec_srnn_rec_type': ['lstm'], # 'elman'. 'lstm'
+    #'dec_net_act': ['tanh'],
+    #'dec_no_bias': [False],
+
+    ### SSMNIST Options ###
+    'ssmnist_seq_len': [2],
+    'ssmnist_two_classes': [True],
 }
 
 conditions = [
@@ -241,10 +263,11 @@ _PERFORMANCE_SORT_ASC = False
 # script. The function handle should expect the list of command line options
 # as only parameter.
 # Example:
-# from sequential.smnist import train_args_smnist as targs
-# f = lambda argv : targs.parse_cmd_arguments(argv=argv)
-# _ARGPARSE_HANDLE = f
-from sequential.smnist import train_args_smnist as targs
+# >>> from classifier.imagenet import train_args as targs
+# >>> f = lambda argv : targs.parse_cmd_arguments(mode='cl_ilsvrc_cub',
+# ...                                             argv=argv)
+# >>> _ARGPARSE_HANDLE = f
+from sequential.seq_smnist import train_args_seq_smnist as targs
 f = lambda argv : targs.parse_cmd_arguments(argv=argv)
 _ARGPARSE_HANDLE = f
 

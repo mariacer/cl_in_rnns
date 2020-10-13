@@ -42,6 +42,7 @@ import pandas as pd
 import shutil
 from subprocess import call
 import numpy as np
+from warnings import warn
 
 from hpsearch import hpsearch
 from sequential import train_args_sequential
@@ -179,7 +180,7 @@ def write_new_grid_to_text(filename, config, location, random_seeds, cmd_args,
     if kwds == None:
         kwds = list(vars(config).keys())
     for key in ['tnet_weights', 'out_dir', 'classification', 'input_dim', \
-            'out_dim', 'hnet_out', 'compression_ratio', 'coresets']:
+            'out_dim', 'hnet_out', 'compression_ratio', 'coresets', 'mode']:
         if key in kwds:
             kwds.remove(key)
 
@@ -324,6 +325,15 @@ def write_seeds_summary(results_dir):
 
     # Load results summary file.
     seeds_summary_file = os.path.join(results_dir, 'search_results.csv')
+    post_result_file = os.path.join(results_dir, 'postprocessing_results.csv')
+    if os.path.exists(post_result_file):
+        seeds_summary_file = post_result_file
+        # FIXME We should read the performance summaries from all result
+        # folders directly.
+        warn('Post-processing result file is used for collecting seed ' +
+             'information. Note, this file might ignore the original run, ' +
+             'that was not part of the hpsearch.')
+
     try:
         seeds_summary = pd.read_csv(seeds_summary_file, sep=';')
         mean_final_accs = seeds_summary['mean_final_accuracy'].values
@@ -509,11 +519,6 @@ def run(ref_module, results_dir='./out/random_seeds', config=None,
                              'other processes are already assigned to a GPU. ' +
                              'Default: %(default)s.')
     cmd_args = parser.parse_args()
-    if cmd_args.seeds_list is not None:
-        seeds_list = misc.str_to_ints(cmd_args.seeds_list)
-        cmd_args.num_seeds = len(seeds_list)
-    else:
-        seeds_list = list(range(cmd_args.num_seeds))
     out_dir = cmd_args.out_dir
 
     if cmd_args.out_dir == '' and cmd_args.config_pickle != '':
@@ -576,6 +581,12 @@ def run(ref_module, results_dir='./out/random_seeds', config=None,
 
         # Since we already have a reference run, we can run one seed less.
         num_seeds -= 1
+
+    if cmd_args.seeds_list is not None:
+        seeds_list = misc.str_to_ints(cmd_args.seeds_list)
+        cmd_args.num_seeds = len(seeds_list)
+    else:
+        seeds_list = list(range(num_seeds))
 
     # Replace config values provided via `forced_params`.
     if len(forced_params.keys()) > 0:

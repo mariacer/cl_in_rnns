@@ -147,7 +147,10 @@ def generate_copy_tasks(config, logger, writer=None):
                 permute_xor=permute_xor, permute_xor_iter=permute_xor_iter,
                 permute_xor_separate=permute_xor_separate,
                 scatter_steps_list=scatter_steps,
-                random_pad=config.random_pad)
+                random_pad=config.random_pad, out_width=config.seq_out_width,
+                pad_after_stop=config.pad_after_stop,
+                pairwise_permute=config.pairwise_permute,
+                revert_output_seq=config.revert_output_seq)
 
     else:
         data_handlers = []
@@ -163,25 +166,32 @@ def generate_copy_tasks(config, logger, writer=None):
 
             print('Creating data handler for task %d ...' % t)
             d = copy_data.CopyTask(min_input_len, max_input_len,
-                seq_width=config.seq_width, num_train=num_train, 
-                num_test=num_test, num_val=num_val, pat_len=config.pat_len,
-                rseed=config.data_random_seed,
+                seq_width=config.seq_width, out_width=config.seq_out_width,
+                num_train=num_train, num_test=num_test, num_val=num_val,
+                pat_len=config.pat_len, rseed=config.data_random_seed,
                 permute_width=config.permute_width,
                 permute_time=config.permute_time, rseed_permute=rseed_permute,
                 scatter_pattern=scatter_pattern, rseed_scatter=rseed_scatter,
                 permute_xor=permute_xor, permute_xor_iter=permute_xor_iter,
                 permute_xor_separate=permute_xor_separate,
-                random_pad=config.random_pad)
+                random_pad=config.random_pad,
+                pad_after_stop=config.pad_after_stop,
+                pairwise_permute=config.pairwise_permute,
+                revert_output_seq=config.revert_output_seq)
             data_handlers.append(d)
             print(d)
 
-            # FIXME not a really nice solution to temper with internal attributes.
+            # FIXME not a really nice solution to temper with internal
+            # attributes.
             assert 'task_id' not in d._data.keys()
             d._data['task_id'] = t
 
             # Plot example data in Tensorboard.
+            test_outs = d.output_to_torch_tensor( \
+                d.get_train_outputs()[:6], 'cpu', mode='inference')
+            test_outs = d._flatten_array(test_outs.numpy(), ts_dim_first=True)
             d.plot_samples('Training Samples - Task %d' % t,
-                d.get_train_inputs()[:6], outputs=d.get_train_outputs()[:6],
+                d.get_train_inputs()[:6], outputs=test_outs,
                 num_samples_per_row=3, show=False, equalize_size=False)
             if writer is not None:
                 writer.add_figure('data', plt.gcf(), t, close=True)

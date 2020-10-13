@@ -461,6 +461,11 @@ hyper_shapes_distilled` and the current statistics will be returned by the
                 else:
                     init_params(self._layer_weight_tensors[i])
 
+        if self._num_context_mod_shapes() == 0:
+            # Note, that might be the case if no hidden layers exist and no
+            # input or output modulation is used.
+            self._use_context_mod = False
+
         self._is_properly_setup()
 
     def forward(self, x, weights=None, distilled_params=None, condition=None):
@@ -491,7 +496,7 @@ hyper_shapes_distilled` and the current statistics will be returned by the
                 ``running_var`` arguments of method
                 :meth:`utils.batchnorm_layer.BatchNormLayer.forward` if
                 batch normalization is used.
-            condition (optional, int or dict): If ``int`` is provided, then this
+            condition (int or dict, optional): If ``int`` is provided, then this
                 argument will be passed as argument ``stats_id`` to the method
                 :meth:`utils.batchnorm_layer.BatchNormLayer.forward` if
                 batch normalization is used.

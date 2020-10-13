@@ -30,8 +30,13 @@ A data handler for the copy task as described in:
 A typical usecase of this dataset is in an incremental learning setting. For
 instance, a sequence of tasks with increasing lengths can be used in curriculum
 learning or continual learning.
+
+The class contains a lot of options to modify the basic copy task. Many of those
+variations target the usecase continual learning (rather than curriculum
+learning) by providing sets of distinct tasks with comparable difficulty. Note,
+these variations typically extend the required input processing and are not
+limited to plain copying.
 """
-import copy
 import matplotlib.pyplot as plt
 import numpy as np
 from warnings import warn
@@ -43,17 +48,18 @@ class CopyTask(SequentialDataset):
     """Data handler for the sequential copy task.
 
     In this task, a binary vector is presented as input, and the network has
-    to learn to copy it. Such that the network cannot rely on intermediate 
+    to learn to copy it. Such that the network cannot rely on intermediate
     information, there is a delay between the end of the input presentation and
-    the output generation. The end of the sequence is delimited by a binary 
-    bit, which is always zero except when the sequence finishes. This flag
-    should not be copied.
+    the output generation. The end of the input sequence is delimited by a
+    binary bit, which is always zero except when the sequence finishes. This
+    flag should not be copied.
 
     An instance of this class will represent copy task patterns of random
-    length but fixed width. The length of input patterns will be sampled 
-    uniformly from the interval ``[min_input_len, max_input_len]``. Note that 
-    the actual length of the patterns ``pat_len`` might be smaller in the case 
-    where there are a certain number of zero-valued timesteps within the input.
+    length (by default) but fixed width (but see option ``out_width``). The
+    length of input patterns will be sampled  uniformly from the interval
+    ``[min_input_len, max_input_len]``. Note that the actual length of the
+    patterns ``pat_len`` might be smaller in the case where there are a certain
+    number of zero-valued timesteps within the input.
     As such, every sequence is characterised by the following values:
 
     - ``pat_len``: the actual length of the binary pattern to be copied.
@@ -86,18 +92,21 @@ class CopyTask(SequentialDataset):
             Note:
                 Each pattern will have a certain length (across time) and
                 a certain width.
+        out_width (int, optional): If specified, a number smaller than
+            ``seq_width`` is expected. In this case, only the first
+            ``out_width`` input features are expected to be copied (i.e., only
+            those occur as target output features).
         num_train (int): Number of training samples.
         num_test (int): Number of test samples.
         num_val (int, optional): Number of validation samples.
         pat_len (int, optional): The actual length of the pattern within the
-            input sequence (excluding zero-valued timested). By default, the 
-            value is `-1` meaning that the pattern length is identical to the
-            input length, and there are no zeroed timesteps. For other values, 
-            the input sequences will be set to zero for the last :math:`t` 
-            timesteps, where :math:`t > pat\_len`.
+            input sequence (excluding zero-valued timesteps). By default, the
+            value is ``-1`` meaning that the pattern length is identical to the
+            input length, and there are no zeroed timesteps. For other values,
+            the input sequences will be zero-padded after ``pat_len`` timesteps.
             Therefore, the input sequence lengths remain the same, but the
-            actual duration of the patterns is reduced. This manipulation is 
-            useful to decouple sequence length and memory requirement for 
+            actual duration of the patterns is reduced. This manipulation is
+            useful to decouple sequence length and memory requirement for
             analysis.
 
             Note:
@@ -135,10 +144,33 @@ class CopyTask(SequentialDataset):
             input pixels are assigned to each output pattern pixel. This
             output pattern pixel will be ``1`` if and only if the number of ones
             in those input pixels is odd.
-        rseed (int, optional): If ``None``, the current random state of numpy 
+        random_pad (bool, optional): If activated, the truncated part of the
+            input (see option ``pat_len``) will be left as a random pattern, and
+            not set to zero.
+            Note that the loss computation is unaffected by this option.
+        pad_after_stop (bool): This option will affect how option ``pat_len`` is
+            handled and therefore can only be used if ``pat_len`` is set.
+            If ``True``, ``pat_len`` will determine the length of the input
+            sequence (no padding applied before the stop bit). Therefore, the
+            padding is moved to after the stop bit and therewith part of the
+            target output. I.e., the original input sequence length determines
+            the output sequence length which consists of zero padding and the
+            input pattern of length ``pat_len``.
+            Note, in this case, the options ``min_input_len`` and
+            ``max_input_len`` actually apply solely to the output.
+        pairwise_permute (bool, optional): This option is only used if 
+            some permutation is activated. If enabled, it will force the
+            permutation to be a pairwise switch between successive pixels.
+            Note that this operation is deterministic, and will therefore be
+            identical for different tasks, if more than one task is generated.
+        revert_output_seq (bool, optional): If enabled, it will revert output
+            sequences along the time dimension. Note that this operation is
+            deterministic, and will therefore be identical for different tasks,
+            if more than one task is generated.
+        rseed (int, optional): If ``None``, the current random state of numpy
             is used to generate the data. Otherwise, a new random state with the
             given seed is generated.
-        rseed_permute (int, optional): Random seed for performing permutations 
+        rseed_permute (int, optional): Random seed for performing permutations
             of the copy patterns. Only used if option ``permute_width`` or 
             ``permute_time`` are activated. If ``None``, the current random 
             state of numpy is used to generate the data. Otherwise, a new random
@@ -146,16 +178,38 @@ class CopyTask(SequentialDataset):
         rseed_scatter (int, optional): See option ``rseed``. Random seed for
             determining which timesteps of the input sequence to use for the
             output pattern if option ``scatter_pattern`` is activated.
-        random_pad (boolean, optional): If activated, the truncated part of the
-            input will be left as a random pattern, and not padded to zeros.
-            Note that the loss computation is unaffected by this option.
     """
-    def __init__(self, min_input_len, max_input_len, seq_width=7, num_train=100,
-                 num_test=100, num_val=None, pat_len=-1, scatter_pattern=False,
-                 permute_width=False, permute_time=False, permute_xor=False,
-                 permute_xor_iter=1, permute_xor_separate=False, rseed=None,
-                 rseed_permute=None, rseed_scatter=None, random_pad=False):
+    def __init__(self, min_input_len, max_input_len, seq_width=7, out_width=-1,
+                 num_train=100, num_test=100, num_val=None, pat_len=-1,
+                 scatter_pattern=False, permute_width=False, permute_time=False,
+                 permute_xor=False, permute_xor_iter=1,
+                 permute_xor_separate=False, random_pad=False,
+                 pad_after_stop=False, pairwise_permute=False, 
+                 revert_output_seq=False,
+                 rseed=None, rseed_permute=None, rseed_scatter=None):
         super().__init__()
+
+        if pad_after_stop and pat_len == -1:
+            raise ValueError('Option "pad_after_stop" can only be set if ' +
+                             '"pat_len" is defined.')
+        if pad_after_stop and random_pad:
+            # We could enforce a fixed random pattern instead of zero-padding.
+            raise NotImplementedError()
+        if pad_after_stop and scatter_pattern:
+            raise ValueError('Options "pad_after_stop" and "scatter_pattern" ' +
+                             'not compatible.')
+        if revert_output_seq and (permute_time or permute_width):
+            raise ValueError('Incompatible options: "revert_output_seq" and ' +
+                             'permutations.')
+
+        if out_width == -1:
+            out_width = seq_width
+        else:
+            assert out_width <= seq_width
+            if out_width < seq_width and permute_width:
+                raise NotImplementedError('The combination of "out_width" ' +
+                                          'with "permute_width" is currently ' +
+                                          'not supported or tested.')
 
         # set random state
         if rseed is not None:
@@ -170,7 +224,11 @@ class CopyTask(SequentialDataset):
         self._permute_xor_separate = permute_xor_separate
         self._rseed_permute = rseed_permute
         self._random_pad = random_pad
+        self._pad_after_stop = pad_after_stop
+        self._pairwise_permute = pairwise_permute
+        self._revert_output_seq = revert_output_seq
 
+        rstate_permute = None
         if permute_width or permute_time:
             # set random state for permutations
             if rseed_permute is not None:
@@ -204,12 +262,13 @@ class CopyTask(SequentialDataset):
             self.permutation_ = []
             for _ in range(permute_xor_iter):
                 self.permutation_.append(CopyTask.create_permutation_matrix( \
-                    permute_time, permute_width, pat_len_perm, seq_width,
-                    rstate_permute))
-        elif permute_width or permute_time:
+                    permute_time, permute_width, pat_len_perm, out_width,
+                    rstate_permute, pairwise_permute=self._pairwise_permute))
+        elif permute_width or permute_time or revert_output_seq:
             self.permutation_ = CopyTask.create_permutation_matrix( \
-                permute_time, permute_width, pat_len_perm, seq_width,
-                rstate_permute)
+                permute_time, permute_width, pat_len_perm, out_width,
+                rstate_permute, pairwise_permute=self._pairwise_permute,
+                revert_output_seq=self._revert_output_seq)
 
         out_pat_steps = None
         if scatter_pattern:
@@ -229,7 +288,7 @@ class CopyTask(SequentialDataset):
                 np.arange(min_input_len), pat_len, replace=False))
 
         # Specify internal data structure.
-        # Note, it's not a typical classification dataset, since it consits of
+        # Note, it's not a typical classification dataset, since it consists of
         # `seq_width` many independent binary classification decisions per
         # timestep.
         self._data['classification'] = False
@@ -238,28 +297,38 @@ class CopyTask(SequentialDataset):
         # Note, there will be an extra channel for the stop bit in each input
         # sample.
         self._data['in_shape'] = [seq_width + 1]
-        self._data['out_shape'] = [seq_width]
+        self._data['out_shape'] = [out_width]
         self._data['train_inds'] = np.arange(num_train)
         self._data['test_inds'] = np.arange(num_train, num_train + num_test)
 
-        self._data['avg_input_length'] = (min_input_len + max_input_len) / 2
+        if pad_after_stop:
+            self._data['avg_input_length'] = pat_len
+            self._data['avg_output_length'] = (min_input_len + max_input_len)/2
+        else:
+            self._data['avg_input_length'] = (min_input_len + max_input_len) / 2
+            self._data['avg_output_length'] = self._data['avg_input_length'] \
+                if pat_len == -1 else pat_len
+        # Note, the following two attributes apply to outputs if
+        # `pad_after_stop`.
         self._data['min_input_len'] = min_input_len
         self._data['max_input_len'] = max_input_len
         self._data['pat_len'] = pat_len
         self._data['scatter_pattern'] = scatter_pattern
         self._data['scatter_steps'] = out_pat_steps
 
-        # Note that the number of timesteps in x is two times the maximum 
-        # input length (one for presenting it, and one for producing it
+        # Note that by default the number of timesteps in x is two times the
+        # maximum  input length (one for presenting it, and one for producing it
         # as an output) plus a delay of 1 timestep between the two.
         # If a certain number of timesteps is zeroed out in the input pattern,
-        # then the target pattern will only correspond to the non-zeroed part
+        # then the target pattern will only correspond to the non-zeroed part.
+        # It may also be that the output has a padded part.
         # Note that this step is important when computing the accuracy and loss 
-        # on the last timestep, since otherwise it will be computed after a long 
-        # silence.
+        # on the correct output timesteps.
         if pat_len == -1:
             self._data['seq_len'] = self._data['max_input_len'] * 2 + 1
         else:
+            # Note, the maximum sequence length is independent of the option
+            # `pad_after_stop`.
             self._data['seq_len'] = self._data['max_input_len'] + 1 + \
                 pat_len
 
@@ -314,6 +383,7 @@ class CopyTask(SequentialDataset):
         zeroed_ts = []
 
         in_size = self._data['in_shape'][0] - 1
+        out_size = self._data['out_shape'][0]
         seq_len = self._data['max_input_len'] * 2 + 1
         scatter_pattern = self._data['scatter_pattern']
 
@@ -329,7 +399,7 @@ class CopyTask(SequentialDataset):
         # sequence (i.e. when scattering patterns), we define y to be twice the
         # length of the maximum sample length plus one, and we will cut it if
         # necessary in :meth:`output_to_torch_tensor`.
-        y = np.zeros((seq_len, n_samples, in_size))
+        y = np.zeros((seq_len, n_samples, out_size))
 
         # Cut each sample to a specific length randomly sampled around average
         # input length for this task.
@@ -337,27 +407,36 @@ class CopyTask(SequentialDataset):
         for i in range(n_samples):
             if self._data['min_input_len'] != self._data['max_input_len']:
                 sample_input_len = self._rstate.randint(\
-                    self._data['min_input_len'], self._data['max_input_len'])
+                    self._data['min_input_len'], self._data['max_input_len']+1)
             else:
                 sample_input_len = self._data['min_input_len']
+            sample_output_len = sample_input_len
 
             # If needed, zero-out the last timesteps of the input, as 
             # specified by the value `pat_len`.
             pat_len = self._data['pat_len']
-            if pat_len == -1 or pat_len > sample_input_len:
-                pat_len = sample_input_len
-            num_zeroed_ts = sample_input_len-pat_len
-            if scatter_pattern:
+
+            if self._pad_after_stop and pat_len < sample_input_len:
+                assert pat_len != -1
+                sample_input_len = pat_len
+            elif not self._pad_after_stop and pat_len != -1 and \
+                    pat_len < sample_output_len:
+                sample_output_len = pat_len
+
+            num_zeroed_ts = 0 if pat_len == -1 else \
+                max(0, sample_input_len-pat_len)
+            if scatter_pattern or self._random_pad:
+                assert not self._pad_after_stop
+                x[sample_input_len:, i, :] = 0
+            elif pat_len == -1 or pat_len > sample_input_len:
                 x[sample_input_len:, i, :] = 0
             else:
-                if not self._random_pad:
-                    # Only pad the rest of the pattern to zero if the option
-                    # "random_pad" has not been activated.
-                    x[pat_len:, i, :] *= 0
+                x[pat_len:, i, :] *= 0
 
             # Copy the content of x into y, after a delay of 1 timestep.
-            y[sample_input_len + 1: sample_input_len*2 + 1, i, :] = \
-                x[:sample_input_len, i, :]
+            oo = sample_output_len - pat_len if self._pad_after_stop else 0
+            y[sample_input_len + 1 + oo: sample_input_len*2 + 1 + oo, i, :] = \
+                x[:sample_input_len, i, :out_size]
 
             # Add flag indicator to easily recover sequence lengths afterwards.
             y[sample_input_len, i, :] = -1 # FIXME it's ugly
@@ -365,7 +444,7 @@ class CopyTask(SequentialDataset):
             # Add the sequence stop flag.
             flag[sample_input_len, i, :] = 1.
 
-            lengths.append(sample_input_len + 1 + pat_len)
+            lengths.append(sample_input_len + 1 + sample_output_len)
             zeroed_ts.append(num_zeroed_ts)
 
         # Concatenate the flag to the inputs.
@@ -421,19 +500,26 @@ class CopyTask(SequentialDataset):
         y[y==-1] = 0.
 
         # Cut irrelevant timesteps for the loss from the output sequences.
+        # This line only has an effect if `pad_len` was set.
         y = y[:self._data['seq_len'], :, :]
-        seq_len, n_samples, in_size = y.shape
+        seq_len, n_samples, out_size = y.shape
         pat_len = self._data['pat_len']
 
-        if self._permute_xor and self.permutation is not None:
+        if self.permutation is not None:
             if pat_len == -1:
-                pat_len = input_len
-            assert seq_len == input_len + 1 + pat_len
+                output_len = input_len
+            else:
+                output_len = pat_len
+            if self._pad_after_stop:
+                output_len = input_len
+                input_len = pat_len
+            assert seq_len == input_len + 1 + output_len
 
+        if self._permute_xor and self.permutation is not None:
             ### Apply permutation & xor iteratively
-            y_pattern = y[input_len+1:, :, :].cpu().numpy()
-            y_pattern_orig = np.array(y_pattern)
-            y_pattern_perm = np.zeros_like(y_pattern)
+            y_pattern = y[input_len+1:, :, :]
+            y_pattern_orig = y_pattern.clone()
+            y_pattern_perm = torch.zeros_like(y_pattern)
             for p in range(self._permute_xor_iter):
                 curr_perm = self.permutation
                 if self._permute_xor_separate:
@@ -443,22 +529,23 @@ class CopyTask(SequentialDataset):
                 for i in range(n_samples):
                     # What pattern to permute:
                     if self._permute_xor_separate: # The original pattern.
-                        sample_pattern = np.array(y_pattern_orig[:, i, :])
+                        sample_pattern = y_pattern_orig[:, i, :].clone()
                     else: # The result of the last XOR operation.
-                        sample_pattern = copy.deepcopy(y_pattern[:, i, :])
+                        sample_pattern = y_pattern[:, i, :].clone()
                     sample_pattern = sample_pattern.flatten()[curr_perm]
-
-                    y_pattern_perm[:, i, :] = sample_pattern.reshape(\
-                        (pat_len, in_size))
+                    
+                    if self._pad_after_stop:
+                        y_pattern_perm[-pat_len:, i, :] = sample_pattern.view( \
+                            (pat_len, out_size))
+                    else:
+                        y_pattern_perm[:, i, :] = sample_pattern.view(\
+                            (output_len, out_size))
                 # update y_pattern by applying xor operation 
-                y_pattern = np.logical_xor( \
-                     y_pattern_perm, y_pattern).astype(float)
-            y[input_len+1:, :, :] = torch.tensor(y_pattern)
+                y_pattern = torch.logical_xor(y_pattern_perm.bool(),
+                                              y_pattern.bool())
+            y[-output_len:, :, :] = y_pattern.double()
 
         elif self.permutation is not None:
-            if pat_len == -1:
-                pat_len = input_len
-            assert seq_len == input_len + 1 + pat_len
 
             ### Apply the permutation.
             # Note that the permutation can be applied either in the width or 
@@ -470,15 +557,19 @@ class CopyTask(SequentialDataset):
             # input). If both are active, the permutation is performed 
             # independently for each point in both dimensions.
             y_pattern = y[input_len+1:, :, :]
-            y_pattern_perm = np.zeros_like(y_pattern.cpu())
+            y_pattern_perm = torch.zeros_like(y_pattern)
             for i in range(n_samples):
-                sample_pattern = copy.deepcopy(y_pattern[:, i, :].cpu())
+                sample_pattern = y_pattern[:, i, :].clone()
                 sample_pattern = sample_pattern.flatten()[self.permutation]
-                y_pattern_perm[:, i, :] = sample_pattern.reshape(\
-                    (pat_len, in_size))
+                if self._pad_after_stop:
+                    y_pattern_perm[-pat_len:, i, :] = sample_pattern.view( \
+                        (pat_len, out_size))
+                else:
+                    y_pattern_perm[:, i, :] = sample_pattern.view( \
+                        (output_len, out_size))
 
             # Add the copied or permuted pattern to the target sequences.
-            y[input_len+1:, :, :] = torch.tensor(y_pattern_perm)
+            y[-output_len:, :, :] = y_pattern_perm
 
         return y
 
@@ -520,13 +611,21 @@ get_in_seq_lengths`.
         zeroed_ts = self.get_zeroed_ts(sample_ids)
 
         # To compute the start index of target pattern.
-        out_pat_start_inds = (seq_lengths + zeroed_ts)// 2 + 1
+        if self._pad_after_stop:
+            out_pat_start_inds = \
+                np.ones_like(seq_lengths) * self._data['pat_len'] + 1
+        else:
+            out_pat_start_inds = (seq_lengths + zeroed_ts) // 2 + 1
 
-        # The actual pattern length after zeroing part of the pattern.
-        pat_len = (seq_lengths + zeroed_ts)// 2 - zeroed_ts
-        assert np.all(np.equal(seq_lengths, out_pat_start_inds + pat_len))
+        if self._pad_after_stop:
+            lengths = zeroed_ts + self._data['pat_len']
+            return out_pat_start_inds, lengths
+        else:
+            # The actual pattern length after zeroing part of the pattern.
+            pat_len = (seq_lengths + zeroed_ts)// 2 - zeroed_ts
+            assert np.all(np.equal(seq_lengths, out_pat_start_inds + pat_len))
 
-        return out_pat_start_inds, pat_len
+            return out_pat_start_inds, pat_len
 
     def get_zeroed_ts(self, sample_ids):
         """Get the number of zeroed timesteps in each input pattern.
@@ -535,6 +634,11 @@ get_in_seq_lengths`.
         number does not refer to the number of padded steps in the input
         sequence but rather to the number of unused steps in the input sequence.
         However, those unused steps will still contain random patterns.
+        Similarly, if argument ``random_pad`` is used.
+
+        Note, if ``pad_after_stop`` was activated, then the zeroed timesteps
+        actually occur after the stop bit, i.e., in the output part of the
+        sequence.
 
         Args:
             (....): See docstring of method :meth:`get_in_seq_lengths`.
@@ -604,22 +708,24 @@ get_in_seq_lengths`.
         # Reshape the values to uncouple inputs and time.
         x = self._flatten_array(inputs, ts_dim_first=True, reverse=True,
                                 feature_shape=self.in_shape)
+        wdiff = self.in_shape[0] - self.out_shape[0]
+
         pdata = [x]
         plabel = ['inputs']
         if outputs is not None:
             t = self._flatten_array(outputs, ts_dim_first=True, reverse=True,
                                     feature_shape=self.out_shape)
             if equalize_size:
-                t = np.concatenate([t, np.zeros((t.shape[0], t.shape[1], 1))],
-                                    axis=2)
+                t = np.concatenate([t, np.zeros((t.shape[0], t.shape[1],
+                                                 wdiff))], axis=2)
             pdata.append(t)
             plabel.append('outputs')
         if predictions is not None:
             y = self._flatten_array(predictions, ts_dim_first=True,
                                     reverse=True, feature_shape=self.out_shape)
             if equalize_size:
-                y = np.concatenate([y, np.zeros((y.shape[0], y.shape[1], 1))],
-                                    axis=2)
+                y = np.concatenate([y, np.zeros((y.shape[0], y.shape[1],
+                                                 wdiff))], axis=2)
 
             if mask_predictions:
                 assert sample_ids is not None
@@ -637,20 +743,24 @@ get_in_seq_lengths`.
             ax.set_ylabel(plabel[i])
             ax.set_xticks([])
             ax.set_yticks([])
-            ax.imshow(d.squeeze().transpose())
+            ax.imshow(d.squeeze(axis=1).transpose())
             fig.add_subplot(ax)
 
     def __str__(self):
         """Print major characteristics of the current dataset."""
         return 'Data handler for the copy task dataset.\n' + \
-               'Sequence width: %i \n' % self._data['in_shape'][0] + \
+               'Input Sequence width: %i \n' % self._data['in_shape'][0] + \
+               'Output Sequence width: %i \n' % self._data['in_shape'][0] + \
                'Average input length: %.1f \n' % \
                     self._data['avg_input_length'] + \
+               'Average output length: %.1f \n' % \
+                    self._data['avg_output_length'] + \
                'Max. total number of timesteps: %i. \n' % \
-               self._data['seq_len'] + \
+                    self._data['seq_len'] + \
                'Dataset contains %d training, %d validation and %d test ' % \
-               (self.num_train_samples, self.num_val_samples,
-                self.num_test_samples) + 'samples.'
+                    (self.num_train_samples, self.num_val_samples,
+                     self.num_test_samples) + \
+               'samples.'
 
     @property
     def permutation(self):
@@ -659,20 +769,50 @@ get_in_seq_lengths`.
 
     @staticmethod
     def create_permutation_matrix(permute_time, permute_width, pat_len_perm,
-                                  seq_width, rstate_permute):
-        """Create a permutation matrix."""
+                                seq_width, rstate_permute, 
+                                pairwise_permute=False, 
+                                revert_output_seq=False):
+        """Create a permutation matrix.
+
+        Args:
+            pairwise_permute (boolean, optional): If True, the permutations 
+                correspond to switching the position of neighboring pixels.
+                For example `1234567` would become `2143657`. If the number of
+                timesteps is odd, the last timestep is left unmoved.
+            revert_output_seq (boolean, optional): If True, the output sequences
+                will be inverted along the time dimension. I.e. a pattern 
+                `1234567` would become `7654321`.
+
+        """
         P = None
-        if permute_width or permute_time:
+        if permute_width or permute_time or revert_output_seq:
             P = np.arange(pat_len_perm*seq_width)
+            if permute_width and pairwise_permute:
+                raise NotImplementedError
             if permute_width and permute_time:
                 P = rstate_permute.permutation(P)
             elif permute_time:
                 P = P.reshape((pat_len_perm, seq_width))
-                P = rstate_permute.permutation(P)
+                if pairwise_permute:
+                    num_ts = P.shape[0]
+                    order = [(b,a) for a, b in zip(np.arange(0, num_ts-1, 2),\
+                        np.arange(1, num_ts, 2))]
+                    order = [item for it in order for item in it] 
+                    # If odd number of timesteps, last one remains unpermuted.
+                    if num_ts % 2 != 0:
+                        order.append(num_ts - 1)
+                    assert len(order) == num_ts
+                    P = P[order, :]
+                else: 
+                    P = rstate_permute.permutation(P)
                 P = P.flatten()
             elif permute_width:
                 P = P.reshape((pat_len_perm, seq_width))
                 P = rstate_permute.permutation(P.T).T
+                P = P.flatten()
+            elif revert_output_seq:
+                P = P.reshape((pat_len_perm, seq_width))
+                P = P[::-1]
                 P = P.flatten()
 
         return P

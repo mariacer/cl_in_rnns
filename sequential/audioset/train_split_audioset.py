@@ -26,6 +26,7 @@ learning setting based on the SplitAudioset Task.
 # Do not delete the following import for all executable scripts!
 import __init__ # pylint: disable=unused-import
 
+from argparse import Namespace
 import matplotlib.pyplot as plt
 import os
 
@@ -46,11 +47,8 @@ def run():
 
     experiment = 'split_audioset'
 
-    # Get command line arguments.
     config = train_args_audioset.parse_cmd_arguments(mode=experiment)
-    # setup env
     device, writer, logger = sutils.setup_environment(config)
-    # get data handlers
     dhandlers = ctu._generate_tasks(config, logger, experiment=experiment)
 
     # Plot images.
@@ -65,7 +63,13 @@ def run():
                 show=True, filename=os.path.join(figure_dir,
                     'test_samples_task_%d.png' % t))
 
-    target_net, hnet, dnet = stu.generate_networks(config, dhandlers, device)
+        # We will use the namespace below to share miscellaneous information between
+    # functions.
+    shared = Namespace()
+    shared.feature_size = dhandlers[0].in_shape[0]
+
+    target_net, hnet, dnet = stu.generate_networks(config, shared, dhandlers,
+                                                   device)
 
     # generate masks if needed
     ctx_masks = None
@@ -75,11 +79,11 @@ def run():
     # We store the target network weights (excluding potential context-mod
     # weights after every task). In this way, we can quantify changes and
     # observe the "stiffness" of EWC.
-    config.tnet_weights = []
+    shared.tnet_weights = []
     # We store the context-mod weights (or all weights) coming from the hypernet
     # after every task, in order to quantify "forgetting". Note, the hnet
     # regularizer should keep them fix.
-    config.hnet_out = []
+    shared.hnet_out = []
 
     # Get the task-specific functions for loss and accuracy.
     task_loss_func = ctu.get_loss_func(config, device, logger, ewc_loss=False)
@@ -108,10 +112,10 @@ def run():
     # Train the network task by task. Testing on all tasks is run after 
     # finishing training on each task.
     ret, train_loss, test_loss, test_acc = sts.train_tasks(dhandlers,
-        target_net, hnet, dnet, device, config, logger, writer, ctx_masks,
-        summary_keywords, summary_filename, task_loss_func=task_loss_func,
-        accuracy_func=accuracy_func, ewc_loss_func=ewc_loss_func,
-        replay_fcts=replay_fcts)
+        target_net, hnet, dnet, device, config, shared, logger, writer,
+        ctx_masks, summary_keywords, summary_filename,
+        task_loss_func=task_loss_func, accuracy_func=accuracy_func,
+        ewc_loss_func=ewc_loss_func, replay_fcts=replay_fcts)
 
     stu.log_results(test_acc, config, logger)
 

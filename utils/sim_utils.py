@@ -41,14 +41,13 @@ from time import time
 from warnings import warn
 import json
 
-from mnets.chunk_squeezer import ChunkSqueezer
 from mnets.mlp import MLP
 from mnets.simple_rnn import SimpleRNN
-from hnets.chunked_hyper_model import ChunkedHyperNetworkHandler
 from hnets.mlp_hnet import HMLP
 from hnets.chunked_mlp_hnet import ChunkedHMLP
 from hnets.structured_mlp_hnet import StructuredHMLP
 from hnets.deconv_hnet import HDeconv
+from hnets.chunked_deconv_hnet import ChunkedHDeconv
 from hnets.chunked_deconv_hnet import ChunkedHDeconv
 from hnets.hyper_model import HyperNetwork
 from utils import logger_config
@@ -187,6 +186,9 @@ def get_mnet_model(config, net_type, in_shape, out_shape, device, cprefix=None,
             available:
 
             - ``mlp``: :class:`mnets.mlp.MLP`
+            - ``resnet``: :class:`mnets.resnet.ResNet`
+            - ``zenke``: :class:`mnets.zenkenet.ZenkeNet`
+            - ``bio_conv_net``: :class:`mnets.bio_conv_net.BioConvNet`
             - ``chunked_mlp``: :class:`mnets.chunk_squeezer.ChunkSqueezer`
             - ``simple_rnn``: :class:`mnets.simple_rnn.SimpleRNN`
         in_shape (list): Shape of network inputs. Can be ``None`` if not
@@ -210,7 +212,8 @@ def get_mnet_model(config, net_type, in_shape, out_shape, device, cprefix=None,
     Returns:
         The created main network model.
     """
-    assert(net_type in ['mlp', 'chunked_mlp', 'simple_rnn'])
+    assert(net_type in ['mlp', 'lenet', 'resnet', 'zenke', 'bio_conv_net',
+                        'chunked_mlp', 'simple_rnn'])
 
     if cprefix is None:
         cprefix = ''
@@ -285,34 +288,6 @@ def get_mnet_model(config, net_type, in_shape, out_shape, device, cprefix=None,
             #out_fn=None,
             verbose=True).to(device)
 
-    elif net_type == 'chunked_mlp':
-        assert hc('cmlp_arch') and hc('cmlp_chunk_arch') and \
-               hc('cmlp_in_cdim') and hc('cmlp_out_cdim') and \
-               hc('cmlp_cemb_dim')
-        assert len(in_shape) == 1 and len(out_shape) == 1
-
-        # Default keyword arguments of class ChunkSqueezer.
-        dkws = misc.get_default_args(ChunkSqueezer.__init__)
-
-        mnet = ChunkSqueezer(n_in=in_shape[0], n_out=out_shape[0],
-            inp_chunk_dim=gc('cmlp_in_cdim'),
-            out_chunk_dim=gc('cmlp_out_cdim'),
-            cemb_size=gc('cmlp_cemb_dim'),
-            #cemb_init_std=1.,
-            red_layers=misc.str_to_ints(gc('cmlp_chunk_arch')),
-            net_layers=misc.str_to_ints(gc('cmlp_arch')),
-            activation_fn=assign(net_act, dkws['activation_fn']),
-            use_bias=assign(not no_bias, dkws['use_bias']),
-            #dynamic_biases=None,
-            no_weights=no_weights,
-            #init_weights=None,
-            dropout_rate=assign(dropout_rate, dkws['dropout_rate']),
-            use_spectral_norm=assign(specnorm, dkws['use_spectral_norm']),
-            use_batch_norm=assign(use_bn, dkws['use_batch_norm']),
-            bn_track_stats=assign(not bn_no_running_stats,
-                                  dkws['bn_track_stats']),
-            distill_bn_stats=assign(bn_distill_stats, dkws['distill_bn_stats']),
-            verbose=True).to(device)
     else:
         assert (net_type == 'simple_rnn')
         assert hc('srnn_rec_layers') and hc('srnn_pre_fc_layers') and \
@@ -351,7 +326,7 @@ def get_hypernet(config, device, net_type, target_shapes, num_conds,
                  no_cond_weights=False, no_uncond_weights=False,
                  uncond_in_size=0, shmlp_chunk_shapes=None,
                  shmlp_num_per_chunk=None, shmlp_assembly_fct=None,
-                 cprefix=None):
+                 verbose=True, cprefix=None):
     """Generate a hypernetwork instance.
 
     A helper to generate the hypernetwork according to the given the user
@@ -388,6 +363,7 @@ def get_hypernet(config, device, net_type, target_shapes, num_conds,
             :class:`hnets.structured_mlp_hnet.StructuredHMLP`.
         shmlp_assembly_fct (func, optional): Argument ``assembly_fct`` of
             :class:`hnets.structured_mlp_hnet.StructuredHMLP`.
+        verbose (bool): Argument ``verbose`` of :class:`hnets.mlp_hnet.HMLP`.
         cprefix (str, optional): A prefix of the config names. It might be, that
             the config names used in this function are prefixed, since several
             hypernetworks should be generated.
@@ -476,7 +452,7 @@ def get_hypernet(config, device, net_type, target_shapes, num_conds,
             uncond_in_size=uncond_in_size,
             cond_in_size=gc('cond_emb_size'),
             layers=hmlp_arch,
-            verbose=True,
+            verbose=verbose,
             activation_fn=assign(net_act, dkws['activation_fn']),
             use_bias=assign(not no_bias, dkws['use_bias']),
             no_uncond_weights=no_uncond_weights,
@@ -502,7 +478,7 @@ def get_hypernet(config, device, net_type, target_shapes, num_conds,
             uncond_in_size=uncond_in_size,
             cond_in_size=gc('cond_emb_size'),
             layers=hmlp_arch,
-            verbose=True,
+            verbose=verbose,
             activation_fn=assign(net_act, dkws['activation_fn']),
             use_bias=assign(not no_bias, dkws['use_bias']),
             no_uncond_weights=no_uncond_weights,
@@ -551,7 +527,7 @@ def get_hypernet(config, device, net_type, target_shapes, num_conds,
             cond_chunk_embs=assign(cond_chunk_embs, dkws['cond_chunk_embs']),
             uncond_in_size=uncond_in_size,
             cond_in_size=gc('cond_emb_size'),
-            verbose=True,
+            verbose=verbose,
             no_uncond_weights=no_uncond_weights,
             no_cond_weights=no_cond_weights,
             num_cond_embs=num_conds).to(device)
@@ -565,7 +541,6 @@ def get_hypernet(config, device, net_type, target_shapes, num_conds,
         raise NotImplementedError
 
     return hnet
-
 
 def get_hnet_model(config, num_tasks, device, mnet_shapes, cprefix=None,
                    no_weights=False, no_tembs=False, temb_size=None):
@@ -635,47 +610,7 @@ def get_hnet_model(config, num_tasks, device, mnet_shapes, cprefix=None,
         temb_size = gc('temb_size')
 
     if isinstance(hyper_chunks, list): # Chunked self-attention hypernet
-        if len(sa_hnet_kernels) == 1:
-            sa_hnet_kernels = sa_hnet_kernels[0]
-        # Note, that the user can specify the kernel size for each dimension and
-        # layer separately.
-        elif len(sa_hnet_kernels) > 2 and \
-            len(sa_hnet_kernels) == gc('sa_hnet_num_layers') * 2:
-            tmp = sa_hnet_kernels
-            sa_hnet_kernels = []
-            for i in range(0, len(tmp), 2):
-                sa_hnet_kernels.append([tmp[i], tmp[i+1]])
-
-        if gc('hnet_dropout_rate') != -1:
-            warn('SA-Hypernet doesn\'t use dropout. Dropout rate will be ' +
-                 'ignored.')
-        if gc('hnet_act') != 'relu':
-            warn('SA-Hypernet doesn\'t support the other non-linearities ' +
-                 'than ReLUs yet. Option "%shnet_act" (%s) will be ignored.'
-                 % (cprefix, gc('hnet_act')))
-
-        hnet = SAHyperNetwork(mnet_shapes, num_tasks,
-            out_size=hyper_chunks,
-            num_layers=gc('sa_hnet_num_layers'),
-            num_filters=sa_hnet_filters,
-            kernel_size=sa_hnet_kernels,
-            sa_units=sa_hnet_attention_layers,
-            # Note, we don't use an additional hypernet for the remaining
-            # weights!
-            #rem_layers=hnet_arch,
-            te_dim=temb_size,
-            no_te_embs=no_tembs,
-            ce_dim=gc('emb_size'),
-            no_theta=no_weights,
-            # Batchnorm and spectral norma are not yet implemented.
-            #use_batch_norm=gc('hnet_batchnorm'),
-            #use_spectral_norm=gc('hnet_specnorm'),
-            # Droput would only be used for the additional network, which we
-            # don't use.
-            #dropout_rate=gc('hnet_dropout_rate'),
-            discard_remainder=True,
-            noise_dim=gc('hnet_noise_dim'),
-            temb_std=gc('temb_std')).to(device)
+        raise NotImplementedError('Not publicly available')
 
     elif hyper_chunks != -1: # Chunked fully-connected hypernet
         hnet = ChunkedHyperNetworkHandler(mnet_shapes, num_tasks,
@@ -693,7 +628,6 @@ def get_hnet_model(config, num_tasks, device, mnet_shapes, cprefix=None,
             temb_std=gc('temb_std')).to(device)
 
     return hnet
-
 
 def calc_train_iter(num_train_samples, batch_size, num_iter=-1, epochs=-1):
     """Calculate the number of training tierations.

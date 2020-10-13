@@ -82,6 +82,7 @@ grid = {
     #'nh_hnet_specnorm': [False],
     #'nh_shmlp_chunk_sizes': ['8'],
     #'nh_shmlp_chunk_fc_layers': [False],
+    #'nh_separate_out_head': [False],
     'use_new_hnet': [False],
 
     ### Initialization Options ###
@@ -100,7 +101,7 @@ grid = {
     #'data_random_seed': [42],
     #'random_seed': [42],
     #'store_activations': [False],
-    #'multitask': [False],
+    #'train_only_heads_after_first': [False],
     #'train_tnet_once': [False],
     #'reinit_tnet': [False],
     #'input_task_identity': [False],
@@ -153,7 +154,9 @@ grid = {
     #'input_len_step': [7],
     #'input_len_variability': [2],
     #'seq_width': [7],
+    #'seq_out_width': [-1],
     #'pat_len': [-1],
+    #'random_pad': [False],
     #'permute_width': [False],
     #'permute_time': [False],
     #'use_new_permuted_dhandler': [False],
@@ -161,6 +164,7 @@ grid = {
     #'permute_xor': [False],
     #'permute_xor_iter': [1],
     #'permute_xor_separate': [False],
+    #'pad_after_stop': [False],
 
     ### Replay Options ###
     #'use_replay': [False],
@@ -188,7 +192,6 @@ conditions = [
 ####################################
 ### DO NOT CHANGE THE CODE BELOW ###
 ####################################
-# The following set of conditions should always be enforced.
 _BASE_CONDITIONS = [
     ({'train_from_scratch':[True]}, {'multitask':[False],
                                      'use_ewc':[False],
@@ -309,9 +312,10 @@ _PERFORMANCE_SORT_ASC = False
 # script. The function handle should expect the list of command line options
 # as only parameter.
 # Example:
-# from sequential.smnist import train_args_smnist as targs
-# f = lambda argv : targs.parse_cmd_arguments(argv=argv)
-# _ARGPARSE_HANDLE = f
+# >>> from classifier.imagenet import train_args as targs
+# >>> f = lambda argv : targs.parse_cmd_arguments(mode='cl_ilsvrc_cub',
+# ...                                             argv=argv)
+# >>> _ARGPARSE_HANDLE = f
 from sequential.copy import train_args_copy as targs
 f = lambda argv : targs.parse_cmd_arguments(argv=argv)
 _ARGPARSE_HANDLE = f

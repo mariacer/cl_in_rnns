@@ -82,6 +82,16 @@ def parse_cmd_arguments(default=False, argv=None):
     seq.miscellaneous_args(magroup, dmask_fraction=0.8, dclassification=True,
                            dts_weighting='last', show_use_ce_loss=False,
                            show_early_stopping_thld=True)
+    # Replay arguments.
+    rep_args = seq.replay_args(parser)
+    cli.generator_args(rep_args, dlatent_dim=100)
+    cli.main_net_args(parser, allowed_nets=['simple_rnn'],
+        dsrnn_rec_layers='256', dsrnn_pre_fc_layers='',
+        dsrnn_post_fc_layers='',
+        show_net_act=True, dnet_act='tanh', show_no_bias=True,
+        show_dropout_rate=False, show_specnorm=False, show_batchnorm=False,
+        prefix='dec_', pf_name='replay decoder')
+
     seq_args(parser)
 
     args = None
@@ -122,13 +132,13 @@ def seq_args(parser):
 
     sgroup = parser.add_argument_group(heading)
     sgroup.add_argument('--ssmnist_seq_len', type=int, default=2,
-                        help='The number of digits used in a sequence')
+                        help='The number of digits used in a sequence. ' +
+                             'Default: %(default)s.')
     sgroup.add_argument('--ssmnist_two_classes', action='store_true',
-                        help='If used, every task will have only 2 classes.' +
-                        ' Instead of classifying every possible sequence ' +
-                        'individually, sequences are randomly grouped into 2' +
-                        ' classes.')
-
+                        help='If used, every task will have only 2 classes. ' +
+                             'Instead of classifying every possible sequence ' +
+                             'individually, sequences are randomly grouped ' +
+                             'into 2 classes.')
 
 if __name__=='__main__':
     pass

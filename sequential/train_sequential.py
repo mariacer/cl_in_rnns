@@ -30,13 +30,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import torch
+import torch.nn.functional as F
 
 from data.timeseries.copy_data import CopyTask
+from data.timeseries.mud_data import MUDData
 from data.timeseries.smnist_data import SMNISTData
+from mnets.bi_rnn import BiRNN
+from mnets.simple_rnn import SimpleRNN
 import sequential.replay_utils as rtu
 import sequential.plotting_sequential as plc
 import sequential.train_utils_sequential as stu
 import sequential.copy.train_utils_copy as tu_copy
+from sequential.pos_tagging.train_utils_pos import compute_f_score
 import sequential.smnist.train_utils_smnist as tu_smnist
 import utils.hnet_regularizer as hreg
 import utils.ewc_regularizer as ewc
@@ -45,7 +50,7 @@ import utils.si_regularizer as si
 from utils.torch_utils import get_optimizer
 from utils import misc
 
-def test(dhandlers, device, config, logger, writer, target_net, hnet,
+def test(dhandlers, device, config, shared, logger, writer, target_net, hnet,
          ctx_masks=None, store_activations=False, plot_output=False,
          accuracy_func=None, task_loss_func=None, num_trained=None,
          return_acc_per_ts=False):
@@ -76,7 +81,7 @@ def test(dhandlers, device, config, logger, writer, target_net, hnet,
           task for classification tasks only. Note that this element is only
           returned if the option "return_acc_per_ts" is enabled. Besides, this
           calculation only makes sense for tasks that have sequences with
-          identical lenghts.
+          identical lengths.
     """
     target_net.eval()
     if hnet is not None:
@@ -144,12 +149,15 @@ def test(dhandlers, device, config, logger, writer, target_net, hnet,
             dhandler.reset_batch_generator()
 
             # get all test data for this task
+            sample_ids = dhandler.get_test_ids()
             X = dhandler.input_to_torch_tensor( \
-                dhandler.get_test_inputs(), device, mode='inference')
-            X = stu.preprocess_inputs(config, X, t)
+                dhandler.get_test_inputs(), device, mode='inference',
+                sample_ids=sample_ids)
+            X = stu.preprocess_inputs(config, shared, X, t)
 
             T = dhandler.output_to_torch_tensor( \
-                dhandler.get_test_outputs(), device, mode='inference')
+                dhandler.get_test_outputs(), device, mode='inference',
+                sample_ids=sample_ids)
             T = stu.adjust_targets_to_head(config, dhandler, T, t,
                 dhandlers=dhandlers, trained_task_id=num_trained-1,
                 is_one_hot=True)
@@ -168,9 +176,17 @@ def test(dhandlers, device, config, logger, writer, target_net, hnet,
                 dhandlers=dhandlers, trained_task_id=num_trained-1)
 
             # get predictions
-            Y_logits, hidden, hidden_int = target_net.forward(X, \
-                weights=ext_tnet_weights, return_hidden=True, 
-                return_hidden_int=True, **tnet_kwargs)
+            if isinstance(target_net, SimpleRNN):
+                Y_logits, hidden, hidden_int = target_net.forward(X, \
+                    weights=ext_tnet_weights, return_hidden=True,
+                    return_hidden_int=True, **tnet_kwargs)
+            else:
+                tnet_kwargs['seq_lengths'] = \
+                    dhandler.get_in_seq_lengths(sample_ids)
+                if store_activations:
+                    raise NotImplementedError()
+                Y_logits = target_net.forward(X, \
+                    weights=ext_tnet_weights, **tnet_kwargs)
             Y_logits = Y_logits[:, :, allowed_outputs]
 
             if plot_output:
@@ -209,12 +225,23 @@ def test(dhandlers, device, config, logger, writer, target_net, hnet,
                     modulations.append(gs_cpu)
 
             losses.append(task_loss_func(Y_logits, T, dhandler, None, None,
-                                         dhandler.get_test_ids()))
+                sample_ids) / dhandler.num_test_samples)
             if config.classification:
                 classifier_accuracy, classifier_accuracy_per_ts = \
-                    accuracy_func(Y_logits, T, dhandler,dhandler.get_test_ids())
+                    accuracy_func(Y_logits, T, dhandler, sample_ids)
                 accuracies.append(classifier_accuracy)
                 accuracies_per_ts.append(classifier_accuracy_per_ts)
+            if isinstance(dhandler, MUDData) and num_trained is not None:
+                f_score = compute_f_score(Y_logits, T, dhandler, sample_ids)
+                if shared.f_scores is None and t == 0:
+                    shared.f_scores = np.zeros((1, config.num_tasks))
+                elif t == 0:
+                    shared.f_scores = np.concatenate((shared.f_scores,
+                        np.zeros((1, config.num_tasks))), axis=0)
+                shared.f_scores[num_trained-1, t] = f_score
+                if t < num_trained:
+                    logger.info('F-score of task %d after learning task %d: ' \
+                                % (t, num_trained-1) + '%.4f.' % f_score)
 
     if store_activations:
         modulations=None if len(modulations) == 0 else modulations
@@ -231,8 +258,8 @@ def test(dhandlers, device, config, logger, writer, target_net, hnet,
         return losses, accuracies
 
 
-def evaluate(config, logger, writer, device, task_id, data, mnet, hnet, dnet,
-             train_iter, mnet_kwargs, ctx_masks=None, accuracy_func=None,
+def evaluate(config, shared, logger, writer, device, task_id, data, mnet, hnet,
+             dnet, train_iter, mnet_kwargs, ctx_masks=None, accuracy_func=None,
              task_loss_func=None, num_trained=None):
     """Evaluate training progress on validation set.
 
@@ -273,12 +300,13 @@ def evaluate(config, logger, writer, device, task_id, data, mnet, hnet, dnet,
             assert num_trained == config.num_tasks
 
     with torch.no_grad():
+        sample_ids = data.get_val_ids()
         X = data.input_to_torch_tensor(data.get_val_inputs(), device,
-                                       mode='inference')
-        X = stu.preprocess_inputs(config, X, task_id)
+                                       mode='inference', sample_ids=sample_ids)
+        X = stu.preprocess_inputs(config, shared, X, task_id)
 
-        T = data.output_to_torch_tensor(data.get_val_outputs(),
-                                        device, mode='inference')
+        T = data.output_to_torch_tensor(data.get_val_outputs(), device,
+                                        mode='inference', sample_ids=sample_ids)
         T = stu.adjust_targets_to_head(config, data, T, task_id,
             trained_task_id=num_trained-1, is_one_hot=True)
 
@@ -292,11 +320,15 @@ def evaluate(config, logger, writer, device, task_id, data, mnet, hnet, dnet,
         allowed_outputs = stu.out_units_of_task(config, data, task_id,
                                                 trained_task_id=num_trained-1)
 
+        if isinstance(mnet, BiRNN):
+            mnet_kwargs['seq_lengths'] = data.get_in_seq_lengths(sample_ids)
+
         Y_logits = mnet.forward(X, weights=ext_tnet_weights, **mnet_kwargs)
         Y_logits = Y_logits[:, :, allowed_outputs]
 
         val_loss = task_loss_func(Y_logits, T, data, None, None,
-                                  data.get_val_ids())
+                                  sample_ids)
+        val_loss /= data.num_val_samples
         writer.add_scalar('val/task_%d/task_loss' % task_id, val_loss,
                           train_iter)
         if config.multitask:
@@ -318,8 +350,8 @@ def evaluate(config, logger, writer, device, task_id, data, mnet, hnet, dnet,
 
     return val_loss, val_accuracy
 
-def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
-    writer, curr_task_id, ctx_masks=None, smoothing_factor=0.5,
+def train_one_task(dhandlers, target_net, hnet, dnet, device, config, shared,
+    logger, writer, curr_task_id, ctx_masks=None, smoothing_factor=0.5,
     task_loss_func=None, accuracy_func=None, ewc_loss_func=None,
     replay_fcts=None):
     """Train continual learning experiment.
@@ -442,38 +474,113 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
     # Define loss function and optimizer
     # We use Adam as it is used in the related work.
     target_net.train()
-    params = []
-    if dnet is not None: # Replay
-        # Classifier is always trained.
-        params = list(target_net.parameters())
+    params = [] # Parameters to be optimized
+
+    # Extract output head weights from target network.
+    po_inds = [ii for ii, m in enumerate(target_net.get_output_weight_mask())
+               if m is not None]
+    tnet_head_params = []
+    for poi in po_inds:
+        if target_net.param_shapes_meta[poi]['index'] != -1:
+            tnet_head_params.append(target_net.internal_params[ \
+                target_net.param_shapes_meta[poi]['index']])
+        else:
+            assert not config.train_only_heads_after_first
+
+    # Extract non-output head weights from target network.
+    nonpo_inds = [ii for ii, m in enumerate(target_net.get_output_weight_mask())
+                  if m is None]
+    tnet_nonhead_params = []
+    for poi in nonpo_inds:
+        if target_net.param_shapes_meta[poi]['index'] != -1:
+            tnet_nonhead_params.append(target_net.internal_params[ \
+                target_net.param_shapes_meta[poi]['index']])
+
+    if dnet is not None: # Generative Replay
+        # Classifier is always trained when using replay.
+        if config.train_only_heads_after_first and curr_task_id > 0:
+            params = list(tnet_head_params)
+            logger.debug('Only training output head weights of encoder.')
+        elif config.dont_train_heads:
+            params = list(tnet_nonhead_params)
+            logger.debug('Not training output head weights of encoder.')
+        else:
+            params = list(target_net.parameters())
         if config.hnet_all:
             # Note, hypernet parameters are appended to `params` below.
             assert hnet is not None and (dnet.internal_params is None or \
                                          len(dnet.internal_params) == 0)
         else:
             params += list(dnet.parameters())
-    else:
-        if not config.hnet_all and \
-                (curr_task_id == 0 or not config.train_tnet_once):
-            params = list(target_net.parameters())
-        elif not config.hnet_all:
-            assert config.use_context_mod
-            logger.debug('Internal target network weights are not learned ' +
-                         'when training on task %d.' % curr_task_id)
-            params = []
-            if config.checkpoint_context_mod:
-                params += target_net.get_cm_weights()
+    elif not config.hnet_all:
+        if curr_task_id == 0:
+            if config.dont_train_heads:
+                params = list(tnet_nonhead_params)
+                logger.debug('Not training output head weights of main net.')
             else:
-                assert hnet is not None
+                params = list(target_net.parameters())
+        elif config.train_tnet_once or config.train_only_heads_after_first:
+            if config.train_only_heads_after_first:
+                params += list(tnet_head_params)
+                logger.debug('Internal target network weights except output ' +
+                    'heads are not learned when training on task ' +
+                    '%d.' % curr_task_id)
+            else:
+                logger.debug('Internal target network weights are not ' +
+                    'learned when training on task %d.' % curr_task_id)
+            if config.use_context_mod:
+                # Context-mod weights are not considered internal target net
+                # weights.
+                params = []
+                if config.checkpoint_context_mod:
+                    params += target_net.get_cm_weights()
+                else:
+                    assert hnet is not None
+        else:
+            if config.dont_train_heads:
+                params = list(tnet_nonhead_params)
+                logger.debug('Not training output head weights of main net.')
+            else: 
+                params = list(target_net.parameters())
+    else:
+        assert config.hnet_all and len(list(target_net.parameters())) == 0
+
     if hnet is not None:
         hnet.train()
         # Note, this means that we include all task embeddings as trainable
         # parameters (hence, the regularizer may change old task embeddings
         # as well).
         params += hnet.parameters()
+
+    # Add word embeddings to training parameters, if any.
+    if hasattr(shared, 'word_emb_lookups') and not config.dont_learn_wembs:
+        if config.multitask:
+            logger.debug('Adding word embeddings of all tasks to optimizer.')
+            for wemb in shared.word_emb_lookups:
+                params.extend(wemb.parameters())
+        else:
+            logger.debug('Adding word embeddings of task %d to optimizer.' \
+                         % curr_task_id)
+            params.extend( \
+                list(shared.word_emb_lookups[curr_task_id].parameters()))
+
     optimizer = get_optimizer(params, lr=config.lr,
         adam_beta1=config.adam_beta1, use_adam=True,
         weight_decay=config.weight_decay)
+
+    # Note, the optimizer contains all trainable weights (including context-mod
+    # or hnet weights) and the order might be arbitrary. However, for SI we only
+    # need the predicted parameter change for those parameters included
+    # in `regged_tnet_weights`. Therefore, we need to know how to extract the
+    # parameter changes prescribed by the optimizer for these weights.
+    if config.use_si:
+        assert len(optimizer.param_groups) == 1
+        regged_to_optim_params = {}
+        for i1, p1 in enumerate(regged_tnet_weights):
+            for i2, p2 in \
+                    enumerate(optimizer.param_groups[0]['params']):
+                if p1 is p2:
+                    regged_to_optim_params[i1] = i2
 
     # In order to have the same total number of training samples when doing 
     # multitask learning, we multiply the number of iterations by the number 
@@ -546,6 +653,7 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
     ### Start Training ###
     ######################
     saved_models = False
+    best_val_loss = None
     best_val_acc = None
     es_val_history = []
     es_val_iters = []
@@ -558,13 +666,23 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
         optimizer.zero_grad()
 
         # Checkpoint current weights for SI.
-        if config.use_si and curr_task_id < config.num_tasks-1:
+        if (config.num_tasks == 1 or curr_task_id < config.num_tasks - 1) and \
+                config.use_si:
             si.si_pre_optim_step(target_net, regged_tnet_weights,
                                  no_pre_step_ckpt=config.si_task_loss_only)
 
         # Choose number of samples for each task:
-        _, batch_sizes = np.unique(np.random.randint(0, high=num_tasks,
-            size=config.batch_size), return_counts=True)
+        batch_tasks, batch_sizes_tmp = np.unique(np.random.randint(0,
+            high=num_tasks, size=config.batch_size), return_counts=True)
+        assert config.multitask or num_tasks == 1
+        batch_sizes_tmp = batch_sizes_tmp.tolist()
+        batch_sizes = []
+        for ii in range(num_tasks):
+            if ii in batch_tasks:
+                batch_sizes.append(batch_sizes_tmp.pop(0))
+            else:
+                batch_sizes.append(0)
+        #assert np.sum(batch_sizes) == config.batch_size
 
         # Iterate across tasks, taking batches from each task and accumulating 
         # the loss into a single value.
@@ -588,6 +706,7 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
         if dnet is not None:
             loss_rec = 0
             loss_pm = 0
+        val_loss = 0
         val_acc = 0
         val_num_samples = 0
 
@@ -610,6 +729,8 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
         for batch_size, dhandler in zip(batch_sizes, dhandlers):
 
             if batch_size == 0:
+                # FIXME In multitask learning, this means that also the
+                # validation isn't run.
                 continue
 
             if not config.last_task_only:
@@ -629,6 +750,7 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
             # We test the network before we run the training iteration.
             # That way, we can see the initial performance of the untrained
             # network.
+            curr_val_loss = None
             curr_val_acc = None
             # Note, we also compute the validation accuracy before the last
             # training iteration to know the performance at the end of
@@ -636,13 +758,15 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
             if (curr_iter % config.val_iter == 0 or \
                     curr_iter == num_train_iter-1) and \
                     dhandler.num_val_samples > 0:
-                _, curr_val_acc = evaluate(config, logger, writer, device,
-                    task_id, dhandler, target_net, hnet, dnet, curr_iter,
-                    tnet_kwargs, ctx_masks=ctx_masks,
+                curr_val_loss, curr_val_acc = evaluate(config, shared, logger,
+                    writer, device, task_id, dhandler, target_net, hnet, dnet,
+                    curr_iter, tnet_kwargs, ctx_masks=ctx_masks,
                     accuracy_func=accuracy_func, task_loss_func=task_loss_func,
                     num_trained=config.num_tasks if config.multitask \
                         else task_id+1)
-                val_acc += curr_val_acc * dhandler.num_val_samples
+                val_loss += curr_val_loss * dhandler.num_val_samples
+                if curr_val_acc is not None:
+                    val_acc += curr_val_acc * dhandler.num_val_samples
                 val_num_samples += dhandler.num_val_samples
 
                 target_net.train()
@@ -651,16 +775,20 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                 if dnet is not None:
                     dnet.train()
             else:
+                val_loss = None
                 val_acc = None
 
             #######################################
             ### Task Loss on Current Mini-batch ###
             #######################################
             batch = dhandler.next_train_batch(batch_size, return_ids=True)
-            X = dhandler.input_to_torch_tensor(batch[0], device, mode='train')
-            X = stu.preprocess_inputs(config, X, task_id)
+            X = dhandler.input_to_torch_tensor(batch[0], device, mode='train',
+                                               sample_ids=batch[2])
+            X_before_preprocessing = X
+            X = stu.preprocess_inputs(config, shared, X, task_id)
 
-            T = dhandler.output_to_torch_tensor(batch[1], device, mode='train')
+            T = dhandler.output_to_torch_tensor(batch[1], device, mode='train',
+                                                sample_ids=batch[2])
             T = stu.adjust_targets_to_head(config, dhandler, T, task_id,
                 trained_task_id=task_id, is_one_hot=True)
 
@@ -674,6 +802,10 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                 ext_tnet_weights = None
             if config.use_masks:
                 ext_tnet_weights = ctx_masks[task_id]
+
+            if isinstance(target_net, BiRNN):
+                tnet_kwargs['seq_lengths'] = \
+                    dhandler.get_out_seq_lengths(batch[2])
 
             Y_logits = target_net.forward(X, weights=ext_tnet_weights,
                                           **tnet_kwargs)
@@ -691,7 +823,11 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
             # Note, since we only estimate the NLL on a minibatch, we have to
             # rescale it's value by a factor N/B, where N is the dataset size
             # and B is the batch size.
-            loss_task /= batch_size
+            if not config.multitask:
+                # Note, in the multitask case we do rescaling below. But for the
+                # CL case we do it here as `loss_task` is reused within the
+                # for loop.
+                loss_task /= batch_size
             # FIXME Scaling requires high reg strengths, so we omit it.
             #loss_task *= dhandler.num_train_samples / batch_size
             # NOTE The distillation losses are currently meaned across the
@@ -700,8 +836,8 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
             # If we compute the gradients wrt to the task-specific loss already
             # now, then we don't need to compute them later anymore.
             calc_grad_loss_task = True
-            if config.use_si and curr_task_id < config.num_tasks-1 and \
-                    config.si_task_loss_only:
+            if (config.num_tasks == 1 or curr_task_id < config.num_tasks-1) \
+                    and config.use_si and config.si_task_loss_only:
                 calc_grad_loss_task = False
 
                 # Compute gradients of task-specific loss.
@@ -712,20 +848,10 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                 param_step = opstep.calc_delta_theta(optimizer, False,
                     lr=config.lr, detach_dt=True)
 
-                # FIXME ugly code. The optimizer contains all trainable weights
-                # (including context-mod or hnet weights). However, we only need
-                # the predicted parameter change for those parameters included
-                # in `regged_tnet_weights`.
-                delta_params = []
-                pind = 0
-                assert len(optimizer.param_groups) == 1
-                for ii, p in enumerate(optimizer.param_groups[0]['params']):
-                    if p is regged_tnet_weights[pind]:
-                        delta_params.append(param_step[ii])
-                        pind += 1
+                delta_params = [None] * len(regged_tnet_weights)
+                for kk, vv in regged_to_optim_params.items():
+                    delta_params[kk] = param_step[vv]
 
-                    if pind == len(regged_tnet_weights):
-                        break
                 assert len(delta_params) == len(regged_tnet_weights)
 
                 si.si_post_optim_step(target_net, regged_tnet_weights,
@@ -837,14 +963,16 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                 # At the moment, all old tasks together have as many samples as
                 # the current task!
                 rep_batch_size = batch_size
-                X_rep, X_rep_ids, X_rep_tids = rtu.replay_samples(config,
-                    device, all_dhandlers, list(range(task_id)), rep_batch_size,
-                    dnet, hnet=hnet, dnet_weights=ckpt_dnet_weights,
+                X_rep, X_rep_ids, X_rep_tids, X_rep_lens = rtu.replay_samples( \
+                    config, shared, device, all_dhandlers, list(range(task_id)),
+                    rep_batch_size, dnet, hnet=hnet,
+                    dnet_weights=ckpt_dnet_weights,
                     hnet_weights=ckpt_hnet_theta, hnet_tembs=ckpt_hnet_tembs,
                     split_by_id=True,
                     replay_all_data=config.replay_true_data,
-                    coresets=config.coresets if config.coreset_size != -1 \
-                                             else None)
+                    coresets=shared.coresets if config.coreset_size != -1 \
+                                             else None,
+                    ret_seq_lens=True)
 
                 # Compute soft-targets for the replayed samples, such that we
                 # have generated "training data for old tasks".
@@ -859,7 +987,9 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                     T_rep_logits.append(rtu.get_soft_targets(config,
                         all_dhandlers, X_rep[i_rep], X_rep_ids[i_rep],
                         target_net, ckpt_tnet_weights,
-                        trained_task_id=task_id-1))
+                        trained_task_id=task_id-1,
+                        input_lens=None if X_rep_lens is None \
+                                        else X_rep_lens[i_rep]))
 
             ###############################################
             ### "Distill" Replayed Data into Classifier ###
@@ -871,26 +1001,46 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
 
                 Y_rep_logits_full = []
                 for i_rep in range(len(X_rep)):
-                    Y_rep_logits_i = target_net.forward(X_rep[i_rep],
-                        weights=ext_tnet_weights, **tnet_kwargs)
+                    if isinstance(target_net, BiRNN):
+                        # TODO Think how to pass sensible sequence lengths to
+                        # bidirectional RNN.
+                        if X_rep_lens is None:
+                            raise NotImplementedError()
+                        Y_rep_logits_i = target_net.forward(X_rep[i_rep],
+                            weights=ext_tnet_weights,
+                            seq_lengths=X_rep_lens[i_rep])
+                    else:
+                        Y_rep_logits_i = target_net.forward(X_rep[i_rep],
+                            weights=ext_tnet_weights)
                     Y_rep_logits_full.append(Y_rep_logits_i)
                     allowed_outputs_rep_i = stu.out_units_of_task(config,
                         all_dhandlers[X_rep_tids[i_rep]], X_rep_tids[i_rep],
                         trained_task_id=task_id)
                     Y_rep_logits_i = Y_rep_logits_i[:, :, allowed_outputs_rep_i]
 
-                    # The input is provided, as in might contain information
-                    # that the loss function might need, e.g., the unpadded
-                    # sequence length by looking at sequence stop bits.
+                    # The input is provided to the distillation loss, as it
+                    # might contain information that the loss function might
+                    # need, e.g., the unpadded sequence length by looking at
+                    # sequence stop bits.
+
+                    # Usually, we assume that the distillation loss function
+                    # can infer the sequence length form the replayed data
+                    # (as the ground truth is typically not known). However,
+                    # if true data is replayed, the sequence length is known
+                    # and could be passed.
+                    extra_rep_args = {}
+                    if isinstance(dhandler, MUDData):
+                        extra_rep_args['in_seq_lens'] = X_rep_lens[i_rep]
                     loss_distill += distill_loss_fct(config, X_rep[i_rep],
                         Y_rep_logits_i, T_rep_logits[i_rep],
-                        all_dhandlers[X_rep_tids[i_rep]])
+                        all_dhandlers[X_rep_tids[i_rep]], **extra_rep_args)
 
                     if soft_trgt_acc_fct is not None:
                         soft_trgt_acc += soft_trgt_acc_fct(config,
                                 X_rep[i_rep], Y_rep_logits_i,
                                 T_rep_logits[i_rep],
-                                all_dhandlers[X_rep_tids[i_rep]]) * \
+                                all_dhandlers[X_rep_tids[i_rep]],
+                                **extra_rep_args) * \
                             T_rep_logits[i_rep].shape[1]
                 if soft_trgt_acc_fct is not None:
                     soft_trgt_acc /= rep_batch_size
@@ -923,6 +1073,9 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                 loss_pm *= config.replay_pm_strength
 
         assert(num_samples == config.batch_size)
+        if config.multitask:
+            # Check comment above for why rescaling is necessary.
+            loss_task /= config.batch_size
 
         #############################
         ### Minimize overall loss ###
@@ -931,6 +1084,8 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
         if config.classification:
             # Normalize accumulated accuracy by number of samples used.
             accuracy /= config.batch_size
+        if val_loss is not None:
+            val_loss /= val_num_samples
         if val_acc is not None:
             val_acc /= val_num_samples
 
@@ -1107,6 +1262,11 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                 loss_dict['distill'].append( \
                     loss_distill.detach().cpu().numpy())
 
+            if val_loss is not None and config.multitask:
+                # We only track the validation loss per task inside function
+                # `evaluate`.
+                writer.add_scalar('val/%s/loss' % subfolder_name,
+                                  val_loss, curr_iter)
             if config.classification:
                 if smoothed_accuracy is None:
                     smoothed_accuracy = accuracy
@@ -1132,9 +1292,9 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
 
                     smoothed_accuracy = None
 
-            #############################################
-            ### Log norm of  hidden-to-hidden weights ###
-            #############################################
+            ############################################
+            ### Log norm of hidden-to-hidden weights ###
+            ############################################
             # FIXME Also log for decoder.
             weights_hh = stu.extract_hh_weights(target_net,
                                                 hnet_out=ext_tnet_weights)
@@ -1148,7 +1308,8 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
             ###############################
             if not config.hnet_all:
                 tnet_grad = torch.cat([g.grad.flatten() for g in \
-                                       target_net.get_non_cm_weights()])
+                       target_net.get_non_cm_weights() if g.grad is not None])
+
                 tnet_grad_norm = torch.norm(tnet_grad, 2)
                 writer.add_scalar('train/%s/tnet_grad_norm' % subfolder_name,
                                   tnet_grad_norm, curr_iter)
@@ -1238,18 +1399,144 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
                     tu_copy.draw_samples('Replayed', X_rep[ii], writer,
                         'replay/replayed_%s' % tid_msg, curr_iter)
 
+            if isinstance(dhandler, MUDData) and not config.multitask:
+                X_str, T_str = dhandler.decode_batch(X_before_preprocessing,
+                                                     T, sample_ids=batch[2])
+                _, Y_str = dhandler.decode_batch(X_before_preprocessing,
+                                                 F.softmax(Y_logits, dim=2),
+                                                 sample_ids=batch[2])
+
+                example_sentence = ' '.join( \
+                    ['%s (%s, %s)' % (X_str[0][ii], T_str[0][ii], Y_str[0][ii])\
+                     for ii in range(len(X_str[0]))])
+                writer.add_text('train/%s/train_sentence' % subfolder_name,
+                                example_sentence, curr_iter)
+
+            #########################################################
+            ### Explore loss contribution of main network weights ###
+            #########################################################
+
+            if hnet is not None and calc_reg:
+                # Compute the contribution to the loss of feedforward and
+                # recurrent weights separately.
+
+                def get_target_net_weights_grad_norm(weight_type='rec'):
+                    """Get the norm of the gradient related to a specific type
+                    of main network weights, recurrent or feedforward.
+
+                    Args:
+                        weight_type (optional, str): The type of main network
+                            weights: recurrent (``'rec'``) or feedforward
+                            (``'ff'``).
+
+                    Returns:
+                        (tuple): Tuple containing:
+
+                        - **hnet_grad** (float): The flattened gradient.
+                        - **hnet_grad_norm** (float): The gradient norm.
+                        - **loss_weights** (float): The associated loss.
+                        - **num_weights** (int): Number of weights of the 
+                          specified type.
+                    """
+
+                    # In order to compute the loss associated with the recurrent
+                    # or feedforward weights only, we provide a mask to the 
+                    # computation of the loss, that associates zero values for
+                    # weights that are not of the specified weight type, and 
+                    # values of one for the specified weight type. These masks
+                    # are then multiplied by the difference between target
+                    # and predicted main network weights when computing the hnet
+                    # regularizer. For coding simplicity, they are provided
+                    # as fisher estimate values to 
+                    # :meth:`hreg.calc_fix_target_reg` even though they have
+                    # nothing to do with EWC.
+                    weights_idxs = task_id*[stu.get_target_net_weight_masks(\
+                            target_net, weight_type=weight_type, device=device)]
+
+                    # Number of weights of the given type (counting all 
+                    # output heads).
+                    num_weights = int(np.sum([ww.sum() for ww in \
+                        weights_idxs[0]]))
+
+                    # Compute the loss associated to the weight type.
+                    optimizer.zero_grad()
+                    loss_weights = hreg.calc_fix_target_reg(hnet,
+                         task_id, targets=hnet_targets,
+                         mnet=target_net if dnet is None else None,
+                         dTheta=None, dTembs=None, prev_theta=prev_hnet_theta,
+                         prev_task_embs=prev_hnet_tembs,
+                         inds_of_out_heads=inds_of_prev_out_heads \
+                             if dnet is None else None,
+                         batch_size=config.hnet_reg_batch_size,
+                         fisher_estimates=weights_idxs)
+                    loss_weights.backward()
+
+                    # Get the gradient norm.
+                    hnet_grad = []
+                    for g in hnet.parameters():
+                        # Note, future task embeddings haven't been used and 
+                        # have no grads therefore.
+                        if g.grad is None:
+                            continue
+                        hnet_grad.append(g.grad.flatten())
+                    hnet_grad = torch.cat(hnet_grad)
+                    hnet_grad_norm = torch.norm(hnet_grad, 2)
+
+                    return hnet_grad, hnet_grad_norm, loss_weights, num_weights
+
+                ## Feedforward weights.
+                hnet_grad_ff, hnet_grad_norm_ff, loss_weights_ff, \
+                    num_ff_weights = \
+                        get_target_net_weights_grad_norm(weight_type='ff')
+                writer.add_scalar('train/%s/hnet_grad_norm_per_ff_w'%\
+                        subfolder_name, hnet_grad_norm_ff/num_ff_weights,
+                        curr_iter)
+                writer.add_scalar('train/%s/hnet_reg_ff_loss' % \
+                    subfolder_name, loss_weights_ff, curr_iter)
+                writer.add_histogram('train/%s/hnet_grad_ff' % \
+                    subfolder_name, hnet_grad_ff, curr_iter)
+
+                ## Recurrent weights.
+                hnet_grad_rec, hnet_grad_norm_rec, loss_weights_rec, \
+                    num_rec_weights = \
+                        get_target_net_weights_grad_norm(weight_type='rec')
+                writer.add_scalar('train/%s/hnet_grad_norm_per_rec_w'%\
+                        subfolder_name, hnet_grad_norm_rec/num_rec_weights,
+                        curr_iter)
+                writer.add_scalar('train/%s/hnet_reg_rec_loss' % \
+                    subfolder_name, loss_weights_rec, curr_iter)
+                writer.add_histogram('train/%s/hnet_grad_rec' % \
+                    subfolder_name, hnet_grad_rec, curr_iter)
+
         #####################################################
         ### Checkpoint if validation performance improved ###
         #####################################################
-        if config.use_best_models and val_acc is not None:
-            if best_val_acc is not None and val_acc > best_val_acc:
-                ckpt_task_id = None if config.multitask else curr_task_id
+        if config.use_best_models and \
+                (val_loss is not None or val_acc is not None):
+
+            wembs = shared.word_emb_lookups if \
+                hasattr(shared, 'word_emb_lookups') and \
+                not config.dont_learn_wembs else None
+
+            ckpt_task_id = None if config.multitask else curr_task_id
+            if val_acc is not None and best_val_acc is not None and \
+                    val_acc > best_val_acc:
                 stu.save_models(config.out_dir, logger, val_acc, target_net,
-                                hnet=hnet, dnet=dnet, task_id=ckpt_task_id,
-                                train_iter=curr_iter, max_ckpts_to_keep=2)
+                    hnet=hnet, dnet=dnet, wembs=wembs, task_id=ckpt_task_id,
+                    train_iter=curr_iter, max_ckpts_to_keep=2)
+                saved_models = True
+            elif val_loss is not None and best_val_loss is not None and \
+                    val_loss < best_val_loss:
+                stu.save_models(config.out_dir, logger, -val_loss, target_net,
+                    hnet=hnet, dnet=dnet, wembs=wembs, task_id=ckpt_task_id,
+                    train_iter=curr_iter, max_ckpts_to_keep=2)
                 saved_models = True
 
-            if best_val_acc is None or val_acc > best_val_acc:
+            if val_loss is not None and \
+                    (best_val_loss is None or val_loss < best_val_loss):
+                best_val_loss = val_loss
+            if val_acc is not None and \
+                    (best_val_acc is None or val_acc > best_val_acc):
                 best_val_acc = val_acc
 
         ######################################
@@ -1351,15 +1638,21 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
     # Note, it is important that we checkpoint the best models before we compute
     # importance weights for CL regularizers!
     if config.use_best_models and saved_models:
+        wembs = shared.word_emb_lookups if \
+                hasattr(shared, 'word_emb_lookups') and \
+                not config.dont_learn_wembs else None
+
         stu.load_models(config.out_dir, device, logger, target_net, hnet=hnet,
-                        dnet=dnet, task_id=ckpt_task_id, train_iter=-1)
+            dnet=dnet, wembs=wembs, task_id=ckpt_task_id, train_iter=-1)
 
         # Delete checkpoints as they are not needed anymore and just waste
         # memory.
-        ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn = stu.ckpt_filenames( \
-            config.out_dir, task_id=ckpt_task_id, train_iter=-1)
+        ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn, ckpt_wembs_fn = \
+            stu.ckpt_filenames(config.out_dir, task_id=ckpt_task_id,
+                               train_iter=-1)
 
-        for ckpt_fn in [ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn]:
+        for ckpt_fn in [ckpt_mnet_fn, ckpt_hnet_fn, ckpt_dnet_fn,
+                        ckpt_wembs_fn]:
             dname, fname = os.path.split(ckpt_fn)
             ckpt_fns = [os.path.join(dname, f) for f in os.listdir(dname) if
                 os.path.isfile(os.path.join(dname, f)) and
@@ -1371,7 +1664,8 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
     #############################
     ### Compute SI Importance ###
     #############################
-    if config.use_si and curr_task_id < config.num_tasks-1:
+    if (config.num_tasks == 1 or curr_task_id < config.num_tasks - 1) and \
+            config.use_si:
         logger.debug('Computing SI importances ...')
         si.si_compute_importance(target_net, regged_tnet_weights)
 
@@ -1398,12 +1692,15 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
         # We need a custom forward method through the main network, as the
         # current implementation does not allow the passing of internal
         # weights.
-        def mnet_only_forward(mnet, params, X):
-            X = stu.preprocess_inputs(config, X, curr_task_id)
+        def mnet_only_forward(mnet, params, X, data, batch_ids):
+            X = stu.preprocess_inputs(config, shared, X, curr_task_id)
+            mnet_kwargs = {}
+            if isinstance(mnet, BiRNN):
+                mnet_kwargs['seq_lengths'] = data.get_in_seq_lengths(batch_ids)
             # Note, we do not specify internal weights (i.e., we ignore
             # argument `params`). Instead, we expect the network to use the
             # internal ones, which are identical to `params`.
-            Y = mnet.forward(X, weights=gain_shifts)
+            Y = mnet.forward(X, weights=gain_shifts, **mnet_kwargs)
             return Y
 
         assert config.tbptt_fisher == -1 or config.tbptt_fisher >= 0
@@ -1413,6 +1710,8 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
         # Note that ewc is only called for non-multitask scenario, so the
         # list of allowed outputs are all identical ranges. We can thus just
         # chose the first index.
+        # Note, option `regression` doesn't matter, since we pass a
+        # `custom_nll`.
         ewc.compute_fisher(curr_task_id, dhandler, regged_tnet_weights, device,
             target_net, empirical_fisher=True, online=True,
             gamma=config.ewc_gamma, n_max=config.n_fisher, regression=False,
@@ -1425,7 +1724,7 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
     ### Select coreset to keep ###
     ##############################
     if use_replay and config.coreset_size != -1:
-        stu.update_coresets(config, curr_task_id, dhandler)
+        stu.update_coresets(config, shared, curr_task_id, dhandler)
 
     ############################
     ### Log Forgetting Stats ###
@@ -1435,16 +1734,16 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
     if not config.multitask and not config.hnet_all:
         curr_tnet_weights = torch.cat([p.detach().flatten().cpu() for p in \
                                        target_net.get_non_cm_weights()])
-        config.tnet_weights.append(curr_tnet_weights)
+        shared.tnet_weights.append(curr_tnet_weights)
         if curr_task_id > 0:
             # Euclidean distance to first task's weights.
             edist_first = torch.sqrt(torch.sum((curr_tnet_weights -\
-                config.tnet_weights[0])**2))
+                shared.tnet_weights[0])**2))
             writer.add_scalar('cl/edist_first', edist_first, curr_task_id)
         if curr_task_id > 1:
             # Euclidean distance to previous task's weights.
             edist_prev = torch.sqrt(torch.sum((curr_tnet_weights -\
-                config.tnet_weights[curr_task_id-1])**2))
+                shared.tnet_weights[curr_task_id-1])**2))
             writer.add_scalar('cl/edist_prev', edist_prev, curr_task_id)
 
         if config.use_ewc:
@@ -1454,8 +1753,7 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
             diag_fisher_hh = [] # only for hidden to hidden weights
 
             # Get the list of meta information about regularized weights.
-            n_cm = 0 if target_net._context_mod_no_weights else \
-                target_net._num_context_mod_shapes()
+            n_cm = target_net._num_context_mod_shapes()
             regged_tnet_meta = target_net._param_shapes_meta[n_cm:]
 
             for ii, _ in enumerate(regged_tnet_weights):
@@ -1512,13 +1810,13 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
             with torch.no_grad():
                 curr_hnet_out = torch.cat([p.detach().flatten().cpu() \
                     for p in stu.hnet_forward(config, hnet, curr_task_id)])
-            config.hnet_out.append(curr_hnet_out)
+            shared.hnet_out.append(curr_hnet_out)
             for tt in range(curr_task_id):
                 with torch.no_grad():
                     curr_hnet_out_tt = torch.cat([p.detach().flatten().cpu() \
                         for p in stu.hnet_forward(config, hnet, tt)])
                 edist_tt = torch.sqrt(torch.sum((curr_hnet_out_tt -\
-                    config.hnet_out[tt])**2))
+                    shared.hnet_out[tt])**2))
                 writer.add_scalar('hreg/task_%d/edist' % tt, edist_tt,
                                   curr_task_id)
 
@@ -1569,8 +1867,8 @@ def train_one_task(dhandlers, target_net, hnet, dnet, device, config, logger,
 
     return loss_dict
 
-def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
-                writer, ctx_masks, summary_keywords, summary_filename,
+def train_tasks(dhandlers, target_net, hnet, dnet, device, config, shared,
+                logger, writer, ctx_masks, summary_keywords, summary_filename,
                 task_loss_func=None, accuracy_func=None,
                 ewc_loss_func=None, replay_fcts=None):
     """ Train continual learning experiments by looping through tasks.
@@ -1581,7 +1879,9 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
         hnet: The model of the classifier hyper network.
         dnet: If existing, the replay model. ``None`` otherwise.
         device: Torch device (cpu or gpu).
-        config: The command line arguments.
+        config (argparse.Namespace): The command line arguments.
+        shared (argparse.Namespace): Miscellaneous information shared across
+            functions.
         logger: Console (and file) logger.
         writer: The tensorboard summary writer.
         ctx_masks: Binary masks used for context-mod.
@@ -1635,6 +1935,9 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
         logger.info('Training continually ...')
         n = config.num_tasks
 
+    wembs = shared.word_emb_lookups if hasattr(shared, 'word_emb_lookups') and \
+        not config.dont_learn_wembs else None
+
     return_code = -1
 
     # lists for storing all accuracy values (ntasks x ntasks) and loss info
@@ -1651,8 +1954,8 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
             during_acc_criterion = [min_daccs[0]] * (n-1)
         elif len(min_daccs) < n-1:
             logger.warn('Too less values in argument "during_acc_criterion". ' +
-                        'First value will be considered for all tasks.')
-            during_acc_criterion = [min_daccs[0]] * (n-1)
+                        'Will be filled up with "-1" values.')
+            during_acc_criterion[:len(min_daccs)] = min_daccs
         elif len(min_daccs) > n-1:
             logger.warn('Too many values in argument "during_acc_criterion". ' +
                         'Only the first %d values are considered.' % (n-1))
@@ -1682,7 +1985,7 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
 
         # Train on the current task.
         loss_dict = train_one_task(dhandlers, target_net, hnet, dnet, device, \
-                                   config, logger, writer, t,
+                                   config, shared, logger, writer, t,
                                    ctx_masks=ctx_masks,
                                    task_loss_func=task_loss_func,
                                    accuracy_func=accuracy_func,
@@ -1692,11 +1995,12 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
 
         # Test on all tasks.
         plot_output = (t == n-1) and config.show_plots
-        task_loss, task_acc = test(dhandlers, device, config, logger, writer,
-            target_net,
-            hnet, ctx_masks=ctx_masks, store_activations=store_activations,
+        task_loss, task_acc = test(dhandlers, device, config, shared, logger,
+            writer, target_net, hnet, ctx_masks=ctx_masks,
+            store_activations=store_activations,
             plot_output=plot_output, task_loss_func=task_loss_func,
             accuracy_func=accuracy_func, num_trained=t+1)
+        task_loss = [tl.cpu().numpy() for tl in task_loss]
         test_loss.append(task_loss)
         if config.classification:
             test_acc.append(task_acc)
@@ -1709,16 +2013,16 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
                         decimals=1)))
         else:
             logger.info('Loss on current task: %.3f' % np.around(task_loss[t], \
-                        decimals=1))
+                                                                 decimals=5))
             logger.info('Loss on all tasks: ' + str(np.around(task_loss, \
-                        decimals=1)))
+                                                              decimals=5)))
 
         # Generate or renitialize the networks if needed.
         if config.train_from_scratch and t < config.num_tasks-1:
             logger.debug('Creating new networks, since training from scratch ' +
                          'is activated ...')
-            target_net, hnet, dnet = stu.generate_networks(config, dhandlers,
-                                                           device)
+            target_net, hnet, dnet = stu.generate_networks(config, shared,
+                                                           dhandlers, device)
         elif config.reinit_tnet and t < config.num_tasks-1:
             logger.debug('Reinitializing target network weights ...')
             # Note, also when using replay, we only want to reinitialize the
@@ -1730,7 +2034,7 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
                                    zero_bias=True)
 
         ### Store results obtained so far ###
-        stu.save_performance_summary(config,
+        stu.save_performance_summary(config, shared,
             np.asarray(test_acc) if config.classification else \
                 np.asarray(test_loss),
             train_loss, summary_keywords=summary_keywords,
@@ -1738,9 +2042,12 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
 
         ### Save current model ###
         if config.store_during_models:
-            assert config.classification
-            stu.save_models(config.out_dir, logger, task_acc[t], target_net,
-                            hnet=hnet, dnet=dnet, task_id=t)
+            if task_acc is None:
+                perf = -task_loss[t]
+            else:
+                perf = task_acc[t]
+            stu.save_models(config.out_dir, logger, perf, target_net,
+                            hnet=hnet, dnet=dnet, wembs=wembs, task_id=t)
 
         ### Check if last task got "acceptable" accuracy ###
         if not config.multitask and t < n-1 and during_acc_criterion[t] != -1 \
@@ -1753,10 +2060,12 @@ def train_tasks(dhandlers, target_net, hnet, dnet, device, config, logger,
 
     ### Save final model ###
     if config.store_final_models:
-        assert config.classification
-        avg_final_acc = float(np.mean(task_acc))
-        stu.save_models(config.out_dir, logger, avg_final_acc, target_net,
-                        hnet=hnet, dnet=dnet)
+        if task_acc is None:
+            perf = - float(np.mean(task_loss))
+        else:
+            perf = float(np.mean(task_acc)) # avg. final accuracy
+        stu.save_models(config.out_dir, logger, perf, target_net,
+                        hnet=hnet, dnet=dnet, wembs=wembs)
 
     if config.classification:
         return return_code, train_loss, np.asarray(test_loss), \

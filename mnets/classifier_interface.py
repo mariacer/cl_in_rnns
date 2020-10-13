@@ -119,7 +119,7 @@ class Classifier(nn.Module, MainNetInterface):
         Returns:
             Knowledge Distillation (KD) loss.
         """
-        assert(target_mapping is None or device is not None)
+        assert target_mapping is None or device is not None
         targets = F.softmax(target_logits / T, dim=1)
         n_classes = logits.shape[1]
         n_targets = targets.shape[1]

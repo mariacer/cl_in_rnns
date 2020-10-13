@@ -739,7 +739,7 @@ class Dataset(ABC):
         return lambda x : x
 
     def input_to_torch_tensor(self, x, device, mode='inference',
-                              force_no_preprocessing=False):
+                              force_no_preprocessing=False, sample_ids=None):
         """This method can be used to map the internal numpy arrays to PyTorch
         tensors.
 
@@ -758,6 +758,10 @@ class Dataset(ABC):
                 option can be used to prohibit any kind of manipulation. Hence,
                 the inputs are transformed into PyTorch tensors on an "as is"
                 basis.
+            sample_ids (numpy.ndarray): See method
+                :meth:`train_ids_to_indices`. Instantiation of this class might
+                make use of this information, for instance in order to reduce
+                the amount of zero padding within a mini-batch.
 
         Returns:
             (torch.Tensor): The given input ``x`` as PyTorch tensor.
@@ -768,7 +772,7 @@ class Dataset(ABC):
         return from_numpy(x).float().to(device)
 
     def output_to_torch_tensor(self, y, device, mode='inference',
-                               force_no_preprocessing=False):
+                               force_no_preprocessing=False, sample_ids=None):
         """Similar to method :meth:`input_to_torch_tensor`, just for dataset
         outputs.
 
@@ -1118,6 +1122,12 @@ class Dataset(ABC):
 
             batch = next_batch_fun(curr_bs, **kwargs)
             yield [curr_bs] + batch
+
+    def __str__(self):
+        """Print major characteristics of the current dataset."""
+        return 'Dataset "%s" with %d training, %d test and %d validation ' \
+            % (self.get_identifier(), self.num_train_samples,
+               self.num_test_samples, self.num_val_samples) + 'samples.'
 
 if __name__ == '__main__':
     pass

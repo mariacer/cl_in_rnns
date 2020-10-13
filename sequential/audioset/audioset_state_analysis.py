@@ -77,4 +77,4 @@ if __name__=='__main__':
                     'fixed_params': ['num_tasks']}
 
     run(config, analysis_kwd, task_loss_func, accuracy_func, \
-        generate_tasks_func, copy_task=False)
+        generate_tasks_func, dataset='audioset')
