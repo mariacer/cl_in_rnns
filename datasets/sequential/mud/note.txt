@@ -1,0 +1,3 @@
+When rerunning the preprocessing for the UD dataset, download the version 2.6 from 
+	https://universaldependencies.org/#download 
+and extract it into this folder.
