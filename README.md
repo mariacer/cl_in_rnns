@@ -2,7 +2,7 @@
 
 A continual learning approach for recurrent neural networks that has the flexibility to learn a dedicated set of parameters, fine-tuned for every task, that doesn't require an increase in the number of trainable weights and is robust against catastrophic forgetting.
 
-For details on this approach please read [our paper](https://arxiv.org/abs/2006.12109). Experiments on continual learning with hypernetworks using static data can be found in [this repository](https://github.com/chrhenning/hypercl).
+For details on this approach please read [our paper](https://arxiv.org/abs/2006.12109). In addition, we summarized some key points from our paper in [this talk](https://www.youtube.com/watch?v=sFNAXF8H0IY). Experiments on continual learning with hypernetworks using static data can be found in [this repository](https://github.com/chrhenning/hypercl).
 
 
 ## Copy Task Experiments
