@@ -437,7 +437,7 @@ class HyperNetwork(nn.Module, CLHyperNetInterface):
         assumptions hold at initialization, which are different for Xavier and
         Kaiming).
 
-        When using these kind of initializations in the hypernetwork, then the
+        When using this kind of initializations in the hypernetwork, then the
         variance of the initial main net weight distribution would simply equal
         the variance of the input embeddings (which can lead to exploding
         activations, e.g., for fan-in inits).
@@ -524,7 +524,7 @@ class HyperNetwork(nn.Module, CLHyperNetInterface):
             was set.
 
         Note:
-            We hypernet inputs should be zero mean.
+            Hypernet inputs should be zero mean.
 
         Args:
             method (str): The type of initialization that should be applied.
@@ -546,18 +546,6 @@ class HyperNetwork(nn.Module, CLHyperNetInterface):
                 Only needs to be specified if external inputs are provided
                 (see argument ``ce_dim`` of constructor).
         """
-        # FIXME If the network has external inputs and task embeddings, then
-        # both these inputs might have different variances. Thus, a single
-        # parameter `input_variance` might not be sufficient.
-        # Now, we assume that the user provides a proper variance. We could
-        # simplify the job for him by providing multiple arguments and compute
-        # the weighting ourselves.
-
-        # FIXME Handle constructor arguments `noise_dim` and `temb_std`.
-        # Note, we would jost need to add `temb_std**2` to the variance of
-        # task embeddings, since the variance of a sum of uncorrelated RVs is
-        # just the sum of the individual variances.
-
         if method not in ['in', 'out', 'harmonic']:
             raise ValueError('Invalid value for argument "method".')
         if not self.has_theta:
@@ -652,7 +640,7 @@ class HyperNetwork(nn.Module, CLHyperNetInterface):
                 var_in = c_relu / (2. * fan_in * input_variance)
                 num = c_relu * (1. - m_fan_in/m_fan_out)
                 denom = fan_in * input_variance
-                var_out = c_relu / max(0, num / denom)
+                var_out = max(0, num / denom)
 
             else:
                 m_fan_in, m_fan_out = iutils.calc_fan_in_and_out(out_shape)
@@ -673,6 +661,8 @@ class HyperNetwork(nn.Module, CLHyperNetInterface):
             std = math.sqrt(var)
             a = math.sqrt(3.0) * std
             torch.nn.init._no_grad_uniform_(self.theta[i], -a, a)
+
+            j += 1
 
 if __name__ == '__main__':
     pass
