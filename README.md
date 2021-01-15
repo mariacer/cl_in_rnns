@@ -43,10 +43,11 @@ $ conda activate cl_rnn_env
 Please cite our paper if you use this code in your research project.
 
 ```
-@article{ehret2020recurrenthypercl,
+@inproceedings{ehret2020recurrenthypercl,
   title={Continual Learning in Recurrent Neural Networks},
   author={Benjamin Ehret and Christian Henning and Maria R. Cervera and Alexander Meulemans and Johannes von Oswald and Benjamin F. Grewe},
-  journal={arXiv preprint arXiv:2006.12109},
-  year={2020}
+  booktitle={International Conference on Learning Representations},
+  year={2021},
+  url={https://arxiv.org/abs/2006.12109}
 }
 ```
