@@ -4,6 +4,7 @@ A continual learning approach for recurrent neural networks that has the flexibi
 
 For details on this approach please refer to [our paper](https://arxiv.org/abs/2006.12109). In addition, a short overview is given in [this talk](https://iclr.cc/virtual/2021/poster/2851) and we summarize some key points from our paper in [this talk](https://www.youtube.com/watch?v=sFNAXF8H0IY). Experiments on continual learning with hypernetworks using static data can be found in [this repository](https://github.com/chrhenning/hypercl).
 
+If you are interested in working with **hypernetworks in PyTorch**, check out the package [hypnettorch](https://github.com/chrhenning/hypnettorch).
 
 ## Copy Task Experiments
 
